@@ -23,30 +23,59 @@ Where you record the output depends on the framework:
 
 ## Vercel AI SDK
 
-Recommended pattern — `onFinish` closes the loop, the wrapper stays open until it fires.
+Two patterns work; both ensure the run stays open until the full text is assembled. Pick the one that fits the call shape:
+
+**Pattern A — non-SSE handler that just needs the text:** `await result.text` resolves only after the stream has fully produced its tokens. Works when the wrapper isn't returning the stream to a browser; you can `setOutput` and return the text.
 
 ```ts
-import { wrapAgent } from 'trodo-node';
-import { streamText } from 'ai';
-import { openai } from '@ai-sdk/openai';
-
 await wrapAgent('chat-agent', async (run) => {
   run.setInput({ question });
+  const result = streamText({
+    model: openai('gpt-4o'),
+    prompt: question,
+    experimental_telemetry: { isEnabled: true },
+  });
+  const text = await result.text;             // ✅ resolves only when stream is done
+  run.setOutput({ answer: text });
+  return text;
+});
+```
+
+**Pattern B — SSE / streaming response handler:** the wrapper has to forward chunks to the client *and* keep the run open until the stream finishes. Use `onFinish` to capture the assembled text, and have the wrapper await a promise that resolves there.
+
+```ts
+await wrapAgent('chat-agent', async (run) => {
+  run.setInput({ question });
+
+  let resolveDone;
+  const done = new Promise((r) => { resolveDone = r; });
 
   const stream = streamText({
     model: openai('gpt-4o'),
     prompt: question,
-    experimental_telemetry: { isEnabled: true },   // required — see vercel-ai-sdk.md
+    experimental_telemetry: { isEnabled: true },
     onFinish({ text }) {
-      run.setOutput({ answer: text });              // record once, fully assembled
+      run.setOutput({ answer: text });        // ✅ record once, fully assembled
+      resolveDone();
     },
   });
 
-  return stream.toTextStreamResponse();
+  // Forward to client elsewhere (or return stream.toTextStreamResponse() to a route).
+  // Critically: don't let the wrapAgent callback resolve before onFinish fires.
+  await done;
 });
 ```
 
-Avoid calling `run.setOutput()` **inside** a `for await (const chunk of stream.textStream)` — the loop runs before `onFinish`, so mid-loop records are partial.
+**Anti-pattern.** Returning `streamText(...)` directly from the callback. The callback resolves to a stream handle while the model is still generating; `wrapAgent` closes the run, and the dashboard records partial / empty output.
+
+```ts
+// ❌ wrapAgent callback resolves before any token has been produced
+return await wrapAgent('chat', async (run) => {
+  return streamText({ ... });
+});
+```
+
+Avoid calling `run.setOutput()` inside `for await (const chunk of stream.textStream)` — the loop runs before `onFinish`, so mid-loop records are partial.
 
 ---
 
@@ -140,6 +169,8 @@ The cleanest pattern: keep the `wrapAgent` callback alive until `onFinish` fires
 ## Pitfalls
 
 - **Calling `run.setOutput` mid-stream.** Records a partial value; the dashboard shows half the answer.
-- **Returning the stream object from `wrapAgent` without awaiting completion.** The callback resolves immediately, the run closes before the stream has produced tokens, and no LLM child span is captured.
+- **Returning the stream object from `wrapAgent` without awaiting completion.** The callback resolves immediately, the run closes before the stream has produced tokens, and the persisted output is empty or partial. Always `await result.text` (or wait for `onFinish`) before returning.
+- **Hand-slicing the assembled text before `setOutput` (`text.slice(0, 500)`).** Caps the persisted run output for no reason; the SDK already truncates at 64 KB. Pass the full string.
+- **Capturing the run output from a function that returns the *promise* of the result.** The promise resolves to a stream / future result; what's captured is the promise itself or whatever it resolves to *at that instant*. Resolve / await first, then `setOutput`.
 - **Missing `stream_options.include_usage`** (OpenAI streaming). LLM span is created but tokens are zero.
 - **Missing `experimental_telemetry`** (Vercel AI SDK streaming). Same as non-streaming — no child LLM spans. See [`vercel-ai-sdk.md`](./vercel-ai-sdk.md).

@@ -1,16 +1,21 @@
 ---
 name: trodo-tracing
-version: 1.0.0
+version: 1.1.0
 sdk_version_node: ">=2.1.0"
 sdk_version_python: ">=2.1.0"
-last_updated: 2026-04-23
+last_updated: 2026-04-27
 description: >-
   Integrate Trodo agent analytics tracing into a codebase. Detects the user's
   language, framework, and existing OTel setup to pick the correct integration
   path and generate working instrumentation code. Use when the user asks to add
   Trodo tracing, fix missing traces, add tool call spans, track conversation
   threads, handle streaming agents, add Trodo alongside existing Datadog/Jaeger
-  OTel, or add custom metadata to AI agent runs.
+  OTel, or add custom metadata to AI agent runs. Specifically enforces three
+  output-capture rules that are easy to get wrong: (1) await the full result
+  before setOutput so streamed replies aren't truncated, (2) put the FULL
+  structured payload in span output and surface short summaries as
+  setAttribute(...) instead of pre-summarising, (3) never hand-slice content
+  before setOutput — the SDK handles caps at 64KB.
 ---
 
 # Trodo Tracing
@@ -134,6 +139,106 @@ The run context propagates inside a single Node/Python process via AsyncLocalSto
 
 → Read: [`references/cross-service.md`](./references/cross-service.md) and `https://docs.trodo.ai/recipes/cross-service.md`.
 
+## Output capture discipline
+
+These three rules are what the dashboard quietly punishes when the integration is wrong. Generated code MUST follow all three; flag any existing code that violates them.
+
+### Rule 1 — Await the full result before `setOutput`
+
+Streaming agents are the common offender. If the wrapped function returns a stream / promise / iterator without consuming it, `setOutput` (or the implicit return-value capture) records whatever has accumulated by then — usually the first chunk or two. The dashboard then shows a chat reply truncated mid-sentence even though the user saw the full answer in the UI.
+
+```ts
+// WRONG — Vercel AI SDK example. result is a stream object; the wrapped
+// function returns before any text is materialised.
+return await wrapAgent('chat', async (run) => {
+  run.setInput({ question });
+  const result = streamText({ model, messages, experimental_telemetry: { isEnabled: true } });
+  return result;                           // ❌ run output ends up empty / partial
+});
+
+// RIGHT — collect the stream first, then setOutput, then return.
+return await wrapAgent('chat', async (run) => {
+  run.setInput({ question });
+  const result = streamText({ model, messages, experimental_telemetry: { isEnabled: true } });
+  const text = await result.text;          // ✅ full text only resolves after the stream finishes
+  run.setOutput({ answer: text });
+  return text;
+});
+```
+
+The same rule applies to LangChain `astream`, OpenAI / Anthropic `stream=True`, async generators, custom SSE handlers — anything where the “result” is a handle to a future stream. The wrapped function must not return until the stream has been consumed.
+
+When the framework offers an `onFinish` callback (Vercel AI SDK), call `setOutput` from there and return a promise that resolves only after `onFinish` fires.
+
+### Rule 2 — Span output is the FULL payload; short summaries go into attributes
+
+When generated code records a span (or sets the run output), the rule is:
+
+- `setOutput(...)` / `set_output(...)` → the **full structured payload**: the orchestrator's complete `results` array, the planner's complete plan + gate + scope, the tool's complete row data. This is what an engineer needs to debug a regression three weeks later.
+- `setAttribute(key, value)` → the **small high-signal bits** that humans want to filter / search / scan: status flags, counts, scores, the LLM-bound summary string. Attributes are flat key/value strings/numbers/booleans — they show up next to the span, not in the Output panel.
+
+```ts
+// WRONG — the “summary” is the only thing persisted; results[] is dropped
+// from the trace forever.
+await trodo.withSpan('orchestrator', async (span) => {
+  const r = await runPhase1({ ... });
+  span.setOutput({ summary: r.summary });   // ❌ loses r.results
+  return r;
+});
+
+// RIGHT — full payload as output; the small summary string and the
+// success/error counts go into searchable attributes.
+await trodo.withSpan('orchestrator', async (span) => {
+  const r = await runPhase1({ ... });
+  span.setOutput(r);                                              // ✅ full results + summary
+  span.setAttribute('result_count', (r.results || []).length);
+  span.setAttribute('ok_count',    r.results.filter(x => x.status === 'ok').length);
+  span.setAttribute('error_count', r.results.filter(x => x.status !== 'ok').length);
+  if (r.summary?.summary) span.setAttribute('summary', String(r.summary.summary));
+  return r;
+});
+```
+
+```python
+# Tool span pattern (Python orchestrator). The tool wrapper produces a
+# ToolResult envelope { status, data: <small LLM summary>, raw: <full> }.
+# Persist `raw` as the span output so the trace shows the real data,
+# and mirror data.summary into a span attribute for quick scanning.
+with trodo.join_run(run_id, parent_span_id, name=tool_name, kind="tool") as tool_span:
+    tool_span.set_input({"tool": tool_name, "params": merged})
+    result = await run_tool(...)
+    raw = result.get("raw")
+    data = result.get("data")
+    output = {"status": result.get("status"), "data": raw if raw is not None else data}
+    if isinstance(data, dict) and isinstance(data.get("summary"), str):
+        tool_span.set_attribute("summary", data["summary"])
+    tool_span.set_output(output)            # ✅ full structured payload
+```
+
+Use `setAttribute` for: counts, durations, scores, status flags, reasons, the LLM-bound summary string, IDs you might want to filter on. Use `setOutput` for: the actual data the agent / tool / step computed.
+
+### Rule 3 — Never hand-truncate the value passed to `setOutput`
+
+The SDK already truncates at 64 KB. Pre-slicing with `.slice(0, 500)` / `[:500]` / regex caps does nothing useful and hides the data the dashboard exists to show. If the value is already legitimately huge (a 1 MB result blob), keep it out of `setOutput` entirely — pass a structured pointer (`{ kind, byte_length, sample: ... }`) and stash the full thing in object storage. Do **not** silently chop the middle off.
+
+```ts
+run.setOutput({ finalAnswer: text.slice(0, 500) });   // ❌ caps the persisted answer
+run.setOutput({ finalAnswer: text });                 // ✅ SDK handles the 64KB cap on its own
+```
+
+This applies equally to span output. If `data` is large but bounded by row counts (e.g. a hotspots array), pass it through unchanged — pagination / column truncation belongs in the dashboard, not the producer.
+
+### Decision table
+
+| Field | What goes here |
+|---|---|
+| `setInput(...)` | The user query / function arguments / tool params — what the step was asked to do |
+| `setOutput(...)` | Everything the step actually produced. Tool result `raw`. Planner's full plan. Synthesizer's full reply. |
+| `setAttribute(key, value)` | Counts, status flags, scores, IDs, the short summary string, anything you'd filter on |
+| `setMetadata(**kwargs)` (run-level only) | Run-wide custom properties: `customer_tier`, `environment`, `feature_flag_X`, version tags |
+
+If you find yourself wanting to put something in both `setOutput` and `setAttribute`, use both — the attribute makes it filterable, the output keeps the full context.
+
 ## Recipes
 
 If the user's pattern matches one of these, start there before writing from scratch:
@@ -240,7 +345,11 @@ Rules the docs mention that assistants routinely miss:
 | Code returns error objects instead of raising — span shows "ok" | Tool / step shows green "ok" status in dashboard even though it failed | Raise an exception inside the `with join_run(...)` / `withSpan(...)` block when the result indicates failure. Catch a sentinel exception outside the block if you need to return the error object rather than re-throw. See cross-service.md "span failure" section. |
 | `withSpan` on caller + `fastapi_middleware` on callee — every operation appears twice | Duplicate spans with names like `planner` and `http.POST./v1/plan` for the same logical call | These two patterns conflict. When the caller owns the semantic span (`withSpan`), remove the middleware from the callee — or use the body-propagation pattern (pass `run_id`/`parent_span_id` in the request body and call `join_run` per sub-operation inside the handler). See cross-service.md "caller-owned vs callee-owned spans". |
 | `propagationHeaders` is not a function (Node CommonJS) | `TypeError: trodo.propagationHeaders is not a function` at runtime | `propagationHeaders` is a **named export**, not on the default export. With `require()`: `const { propagationHeaders } = require('trodo-node')` — or after loading the module, attach it: `trodo.propagationHeaders = trodoModule.propagationHeaders`. |
-| `setOutput` / `set_output` with metadata instead of real data | Dashboard shows `{ answerLength: 478 }` or `{ status: "ok" }` — not useful for debugging | Pass the actual payload: `setOutput({ answer: text.slice(0, 1000) })` for LLM outputs; `set_output({"status": status, "data": result_dict})` for tool spans. Trodo truncates at the server if needed — don't pre-summarize into useless counts or flags. |
+| `setOutput` / `set_output` with metadata instead of real data | Dashboard shows `{ answerLength: 478 }` or `{ status: "ok" }` — not useful for debugging | Pass the actual payload: `setOutput({ answer: text })` for LLM outputs; `set_output({"status": status, "data": raw_or_full_dict})` for tool spans. Trodo truncates at 64KB on the server — don't pre-summarize into useless counts or flags. |
+| Wrapped function returns the stream object instead of the awaited text | Run output captured at half a sentence; chat reply renders fine in the UI but persists truncated mid-table or mid-paragraph | **Rule 1.** Consume the stream inside the wrapper (e.g. `const text = await result.text;` for Vercel AI SDK, or call `setOutput` from `onFinish`) and only then `setOutput` / return. Never return a stream handle from a `wrapAgent` callback. |
+| Hand-slicing `setOutput` payload (`text.slice(0, 500)`, `[:500]`) | Persisted run / span output cuts off mid-sentence even though the source was complete | **Rule 3.** Remove the slice. SDK caps at 64 KB on its own. If the payload is genuinely too large for that, structure it (`{ kind, byteLength, sample, ref }`) — never silently chop. |
+| Tool / planner / orchestrator span only stores a hand-picked subset of the result | Activity tab shows `{summary: "..."}` even though the tool computed full per-row data; debugging requires re-running | **Rule 2.** `setOutput(fullResult)` and use `setAttribute('summary', s)`, `setAttribute('result_count', n)`, etc. for the searchable bits. Same shape applies to internal staged spans (planner, orchestrator, evaluator, synthesize) — full payload as output, scalars as attributes. |
+| Tool wrapper drops the `raw` field on the way to the span | Tool's full structured output is computed but lost — only the LLM-bound `data.summary` lands in the trace | When building a span output for a tool result, prefer `result.raw` over `result.data` if both are present; `data` is the small LLM-bound summary, `raw` is the full payload meant for observability. |
 
 ## When things go wrong
 

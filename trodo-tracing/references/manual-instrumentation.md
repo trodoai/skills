@@ -188,3 +188,59 @@ await trodo.withSpan({ kind: 'llm', name: 'chat.completions' }, async (span) => 
 ```
 
 `withSpan` ends the span automatically when the callback returns or throws. Prefer it over raw OTel `tracer.startActiveSpan` — the latter requires manual `span.end()` in all code paths, which is easy to forget in error branches.
+
+---
+
+## Span output vs span attributes — the split
+
+This rule turns up in every multi-stage agent and is easy to get wrong. The trace is only useful if `setOutput` carries the **full payload** of what the step actually produced; the small filterable bits go into `setAttribute`.
+
+```ts
+// Example: orchestrator stage that calls multiple downstream tools.
+await trodo.withSpan('orchestrator', async (span) => {
+  span.setInput({ tools: phase1Tools });
+  const r = await runPhase1({ ... });   // r = { results: [...], summary: { ... } }
+
+  span.setOutput(r);                                          // ✅ full results[] preserved
+  span.setAttribute('result_count', r.results.length);
+  span.setAttribute('ok_count',  r.results.filter(x => x.status === 'ok').length);
+  span.setAttribute('error_count', r.results.filter(x => x.status !== 'ok').length);
+  if (r.summary?.summary) span.setAttribute('summary', String(r.summary.summary));
+
+  return r;
+});
+```
+
+```python
+# Tool span pattern. The tool envelope carries both:
+#   data : small LLM-bound summary (used downstream by the model)
+#   raw  : full structured payload (intended for observability)
+# Persist `raw` as span output and mirror data.summary into an attribute.
+with trodo.join_run(run_id, parent_span_id, name=tool_name, kind="tool") as span:
+    span.set_input({"tool": tool_name, "params": merged})
+    result = await run_tool(tool_name, merged)
+
+    raw  = result.get("raw")
+    data = result.get("data")
+    output = {"status": result.get("status"), "data": raw if raw is not None else data}
+
+    if isinstance(data, dict) and isinstance(data.get("summary"), str):
+        span.set_attribute("summary", data["summary"])
+    span.set_output(output)
+```
+
+What goes where:
+
+| Method | Use for |
+|---|---|
+| `setInput` / `set_input` | The arguments / params / question that triggered this step |
+| `setOutput` / `set_output` | The **complete** structured result the step produced (raw rows, full plan, full reply) |
+| `setAttribute` / `set_attribute` | Counts, status flags, scores, IDs, the LLM-bound summary string — anything you'd filter on in the dashboard |
+| `setMetadata` / `set_metadata` (run-level only) | Run-wide context: `customer_tier`, `environment`, deploy version, feature flags |
+
+Anti-patterns to avoid:
+
+- `setOutput({ summary: r.summary })` — drops `r.results`. Use `setOutput(r)` and put the summary in an attribute instead.
+- `setOutput(r.text.slice(0, 500))` — there's no reason to pre-truncate. SDK caps at 64 KB on its own.
+- Passing pre-shrunk `data` (the LLM-bound copy) to `setOutput` when the tool also has a `raw` field. Prefer `raw` for observability; `data` is for the prompt.
+- Putting structured payloads in `setAttribute`. Attributes are flat; objects get stringified and become hard to search. Keep attributes scalar.
