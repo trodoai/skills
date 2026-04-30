@@ -1,21 +1,25 @@
 ---
 name: trodo-tracing
-version: 1.1.0
+version: 1.2.0
 sdk_version_node: ">=2.1.0"
 sdk_version_python: ">=2.1.0"
-last_updated: 2026-04-27
+sdk_version_node_long_session: ">=2.2.0"
+sdk_version_python_long_session: ">=2.2.0"
+last_updated: 2026-04-30
 description: >-
   Integrate Trodo agent analytics tracing into a codebase. Detects the user's
   language, framework, and existing OTel setup to pick the correct integration
   path and generate working instrumentation code. Use when the user asks to add
   Trodo tracing, fix missing traces, add tool call spans, track conversation
   threads, handle streaming agents, add Trodo alongside existing Datadog/Jaeger
-  OTel, or add custom metadata to AI agent runs. Specifically enforces three
-  output-capture rules that are easy to get wrong: (1) await the full result
-  before setOutput so streamed replies aren't truncated, (2) put the FULL
-  structured payload in span output and surface short summaries as
-  setAttribute(...) instead of pre-summarising, (3) never hand-slice content
-  before setOutput — the SDK handles caps at 64KB.
+  OTel, or add custom metadata to AI agent runs. Also covers long-lived
+  multi-process sessions (MCP servers, websocket-pinned chats, scheduled jobs)
+  via the startRun / endRun primitives added in SDK 2.2.0. Specifically
+  enforces three output-capture rules that are easy to get wrong: (1) await
+  the full result before setOutput so streamed replies aren't truncated, (2)
+  put the FULL structured payload in span output and surface short summaries
+  as setAttribute(...) instead of pre-summarising, (3) never hand-slice
+  content before setOutput — the SDK handles caps at 64KB.
 ---
 
 # Trodo Tracing
@@ -138,6 +142,23 @@ The run context propagates inside a single Node/Python process via AsyncLocalSto
 → **Worker thread / ProcessPoolExecutor:** capture `runId` from the parent, pass it in, call `joinRun(runId, fn)` / `join_run(run_id, ...)` inside.
 
 → Read: [`references/cross-service.md`](./references/cross-service.md) and `https://docs.trodo.ai/recipes/cross-service.md`.
+
+### 5. Long-lived session across many HTTP requests / processes?
+
+`wrapAgent` is a single-callback / single-context-manager block — it opens *and* closes the run in one call stack. That's wrong for sessions that live across many requests over minutes or hours, served by potentially different worker processes:
+
+- **MCP servers** — one third-party session (`Mcp-Session-Id`) spans many `tools/call` requests.
+- **Websocket-pinned chats** — long-running connection where each message is a separate handler.
+- **Scheduled jobs that resume on different workers.**
+- **Anything where the run's start and end are not in the same call stack.**
+
+→ Use `startRun(name, opts)` to open the run and get back a `runId`, persist it (Redis is typical), use `joinRun(runId, ...)` from each subsequent request to add child spans, then `endRun(runId, opts)` from a sweeper / timeout / explicit close. Same `runId` threads through everything.
+
+Requires `trodo-node >= 2.2.0` / `trodo-python >= 2.2.0`. If the user is on an older SDK, recommend upgrading before suggesting this pattern.
+
+→ Read: [`references/long-session.md`](./references/long-session.md) and `https://docs.trodo.ai/agent-analytics/tracing/start-run-end-run.md`.
+
+When NOT to reach for this: if the entire run can be expressed inside one async function, prefer `wrapAgent` — it's one HTTP call to the backend instead of two and keeps the surface area smaller.
 
 ## Output capture discipline
 
@@ -350,6 +371,8 @@ Rules the docs mention that assistants routinely miss:
 | Hand-slicing `setOutput` payload (`text.slice(0, 500)`, `[:500]`) | Persisted run / span output cuts off mid-sentence even though the source was complete | **Rule 3.** Remove the slice. SDK caps at 64 KB on its own. If the payload is genuinely too large for that, structure it (`{ kind, byteLength, sample, ref }`) — never silently chop. |
 | Tool / planner / orchestrator span only stores a hand-picked subset of the result | Activity tab shows `{summary: "..."}` even though the tool computed full per-row data; debugging requires re-running | **Rule 2.** `setOutput(fullResult)` and use `setAttribute('summary', s)`, `setAttribute('result_count', n)`, etc. for the searchable bits. Same shape applies to internal staged spans (planner, orchestrator, evaluator, synthesize) — full payload as output, scalars as attributes. |
 | Tool wrapper drops the `raw` field on the way to the span | Tool's full structured output is computed but lost — only the LLM-bound `data.summary` lands in the trace | When building a span output for a tool result, prefer `result.raw` over `result.data` if both are present; `data` is the small LLM-bound summary, `raw` is the full payload meant for observability. |
+| Used `wrapAgent` for an MCP server or other multi-request session | Every `tools/call` becomes its own disconnected Run — impossible to reconstruct a session | Switch to `startRun` + `joinRun` + `endRun` (SDK 2.2.0+). See [`references/long-session.md`](./references/long-session.md). |
+| `startRun` called but never `endRun` | Run stuck in `"running"` forever in the dashboard | Pair every `startRun` with a guaranteed close path — a TTL sweeper, an explicit session-end notification, or `try/finally` if the session is bounded by one request lifecycle. |
 
 ## When things go wrong
 
