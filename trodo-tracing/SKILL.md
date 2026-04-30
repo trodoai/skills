@@ -1,10 +1,12 @@
 ---
 name: trodo-tracing
-version: 1.2.0
+version: 1.4.0
 sdk_version_node: ">=2.1.0"
 sdk_version_python: ">=2.1.0"
 sdk_version_node_long_session: ">=2.2.0"
 sdk_version_python_long_session: ">=2.2.0"
+sdk_version_node_track_mcp: ">=2.3.0"
+sdk_version_python_track_mcp: ">=2.3.0"
 last_updated: 2026-04-30
 description: >-
   Integrate Trodo agent analytics tracing into a codebase. Detects the user's
@@ -12,14 +14,15 @@ description: >-
   path and generate working instrumentation code. Use when the user asks to add
   Trodo tracing, fix missing traces, add tool call spans, track conversation
   threads, handle streaming agents, add Trodo alongside existing Datadog/Jaeger
-  OTel, or add custom metadata to AI agent runs. Also covers long-lived
-  multi-process sessions (MCP servers, websocket-pinned chats, scheduled jobs)
-  via the startRun / endRun primitives added in SDK 2.2.0. Specifically
-  enforces three output-capture rules that are easy to get wrong: (1) await
-  the full result before setOutput so streamed replies aren't truncated, (2)
-  put the FULL structured payload in span output and surface short summaries
-  as setAttribute(...) instead of pre-summarising, (3) never hand-slice
-  content before setOutput — the SDK handles caps at 64KB.
+  OTel, or add custom metadata to AI agent runs. **For MCP servers — record one
+  RUNLESS span per tools/call (no parent run); see the MCP recipe.** For
+  websocket-pinned chats and scheduled jobs that resume across workers, the
+  startRun / endRun primitives (SDK 2.2.0) still apply. Specifically enforces
+  three output-capture rules: (1) await the full result before setOutput so
+  streamed replies aren't truncated, (2) put the FULL structured payload in
+  span output and surface short summaries as setAttribute(...) instead of
+  pre-summarising, (3) never hand-slice content before setOutput — the SDK
+  handles caps at 64KB.
 ---
 
 # Trodo Tracing
@@ -143,14 +146,49 @@ The run context propagates inside a single Node/Python process via AsyncLocalSto
 
 → Read: [`references/cross-service.md`](./references/cross-service.md) and `https://docs.trodo.ai/recipes/cross-service.md`.
 
-### 5. Long-lived session across many HTTP requests / processes?
+### 5a. Building an MCP server that proxies tool calls?
 
-`wrapAgent` is a single-callback / single-context-manager block — it opens *and* closes the run in one call stack. That's wrong for sessions that live across many requests over minutes or hours, served by potentially different worker processes:
+`wrapAgent` and `startRun`/`endRun` are both wrong for MCP. The MCP server proxies tool calls but **never sees the user's prompt or the LLM's final answer** — those live inside Claude.ai / Cursor / ChatGPT, deliberately not exposed. So a "run" wrapping an MCP session has nothing meaningful in `input` / `output` and clustering it carries no signal.
 
-- **MCP servers** — one third-party session (`Mcp-Session-Id`) spans many `tools/call` requests.
+→ **Use the `track_mcp` / `trackMcp` SDK helper.** One call per `tools/call`. Requires `trodo-python >= 2.3.0` / `trodo-node >= 2.3.0`.
+
+```python
+# Python
+trodo.track_mcp(
+    tool=tool_name,
+    distinct_id=req.user_email,
+    session_id=req.headers.get("mcp-session-id"),
+    input=arguments,
+    output=result,
+    duration_ms=elapsed_ms,
+    client_label="anthropic",
+)
+```
+
+```typescript
+// Node
+await trodo.trackMcp({
+  tool: toolName,
+  distinctId: req.userEmail,
+  sessionId: req.headers["mcp-session-id"],
+  input: args,
+  output: result,
+  durationMs: elapsedMs,
+  clientLabel: "anthropic",
+});
+```
+
+Auto-fills `span_id`, `agent_name="MCP"`, `kind="tool"`, `name="tool.<tool>"`, `started_at`, `ended_at`. The customer only thinks about `tool`, `distinct_id`, `input`, `output`, `duration_ms`. Returns the span_id.
+
+→ Read: [`references/mcp-runless.md`](./references/mcp-runless.md) for raw-HTTP fallback, dashboard queries, and pitfalls.
+
+### 5b. Websocket-pinned chats / scheduled jobs that resume across workers?
+
+These genuinely have a beginning, middle, and end with one logical run. `wrapAgent` is a single-callback block — it opens *and* closes the run in one call stack, which can't bridge workers. Use the long-session primitives instead:
+
 - **Websocket-pinned chats** — long-running connection where each message is a separate handler.
 - **Scheduled jobs that resume on different workers.**
-- **Anything where the run's start and end are not in the same call stack.**
+- **Anything where the run's start and end are not in the same call stack** AND the server actually owns the prompt+answer (i.e., not MCP — see 5a).
 
 → Use `startRun(name, opts)` to open the run and get back a `runId`, persist it (Redis is typical), use `joinRun(runId, ...)` from each subsequent request to add child spans, then `endRun(runId, opts)` from a sweeper / timeout / explicit close. Same `runId` threads through everything.
 
@@ -158,7 +196,7 @@ Requires `trodo-node >= 2.2.0` / `trodo-python >= 2.2.0`. If the user is on an o
 
 → Read: [`references/long-session.md`](./references/long-session.md) and `https://docs.trodo.ai/agent-analytics/tracing/start-run-end-run.md`.
 
-When NOT to reach for this: if the entire run can be expressed inside one async function, prefer `wrapAgent` — it's one HTTP call to the backend instead of two and keeps the surface area smaller.
+When NOT to reach for this: if the entire run can be expressed inside one async function, prefer `wrapAgent` — simpler and one HTTP call to the backend.
 
 ## Output capture discipline
 
@@ -275,6 +313,7 @@ If the user's pattern matches one of these, start there before writing from scra
 | `https://docs.trodo.ai/recipes/sub-agents.md` | Parent agent spawning linked child runs |
 | `https://docs.trodo.ai/recipes/from-scratch.md` | Raw HTTP to a custom LLM endpoint |
 | `https://docs.trodo.ai/recipes/dual-export.md` | Existing OTel + Trodo side-by-side |
+| `https://docs.trodo.ai/recipes/mcp-server.md` | **MCP server (runless spans)** — one span per `tools/call`, no parent run |
 
 ## Minimal install — what the generated code should look like
 
@@ -371,7 +410,9 @@ Rules the docs mention that assistants routinely miss:
 | Hand-slicing `setOutput` payload (`text.slice(0, 500)`, `[:500]`) | Persisted run / span output cuts off mid-sentence even though the source was complete | **Rule 3.** Remove the slice. SDK caps at 64 KB on its own. If the payload is genuinely too large for that, structure it (`{ kind, byteLength, sample, ref }`) — never silently chop. |
 | Tool / planner / orchestrator span only stores a hand-picked subset of the result | Activity tab shows `{summary: "..."}` even though the tool computed full per-row data; debugging requires re-running | **Rule 2.** `setOutput(fullResult)` and use `setAttribute('summary', s)`, `setAttribute('result_count', n)`, etc. for the searchable bits. Same shape applies to internal staged spans (planner, orchestrator, evaluator, synthesize) — full payload as output, scalars as attributes. |
 | Tool wrapper drops the `raw` field on the way to the span | Tool's full structured output is computed but lost — only the LLM-bound `data.summary` lands in the trace | When building a span output for a tool result, prefer `result.raw` over `result.data` if both are present; `data` is the small LLM-bound summary, `raw` is the full payload meant for observability. |
-| Used `wrapAgent` for an MCP server or other multi-request session | Every `tools/call` becomes its own disconnected Run — impossible to reconstruct a session | Switch to `startRun` + `joinRun` + `endRun` (SDK 2.2.0+). See [`references/long-session.md`](./references/long-session.md). |
+| Used `wrapAgent` for an MCP server | Every `tools/call` becomes its own disconnected Run; the synthetic Run carries no input/output because the MCP server never sees the user's prompt or the LLM's answer | Switch to `trodo.track_mcp(...)` (Python) / `trodo.trackMcp({...})` (Node) — one runless span per `tools/call`, no parent run. Requires SDK >= 2.3.0. See [`references/mcp-runless.md`](./references/mcp-runless.md). |
+| Used `startRun` / `endRun` for an MCP server | Runs stuck in `running` (no clean session-end signal in MCP); spans threaded into a Run that has no meaningful prompt/answer to anchor them | Same fix — switch to `track_mcp` / `trackMcp`. `startRun`/`endRun` is correct for websocket-pinned chats and scheduled jobs, NOT for MCP proxies. See [`references/mcp-runless.md`](./references/mcp-runless.md). |
+| Used `wrapAgent` for a websocket-pinned chat or scheduled job | Single-callback block can't bridge requests/workers | Switch to `startRun` + `joinRun` + `endRun` (SDK 2.2.0+). See [`references/long-session.md`](./references/long-session.md). |
 | `startRun` called but never `endRun` | Run stuck in `"running"` forever in the dashboard | Pair every `startRun` with a guaranteed close path — a TTL sweeper, an explicit session-end notification, or `try/finally` if the session is bounded by one request lifecycle. |
 
 ## When things go wrong

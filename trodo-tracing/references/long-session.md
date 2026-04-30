@@ -2,13 +2,16 @@
 
 > Requires `trodo-node >= 2.2.0` and `trodo-python >= 2.2.0`. Older SDKs do not expose these primitives — `wrapAgent` is the only public lifecycle, and it can't span multiple HTTP requests.
 
+> **NOT FOR MCP SERVERS.** If you're tracing an MCP server (third-party MCP session calling your `tools/call` endpoint), use [**runless spans**](./mcp-runless.md) instead. MCP servers proxy tool calls but never see the user's prompt or the LLM's final answer, so a Run carries no analytical value — and MCP has no clean session-end signal, so Runs created at `initialize` get stuck in `running` forever. The runless span pattern is purpose-built for MCP.
+
 ## When to use this pattern
 
-Use `startRun` + `joinRun` + `endRun` when a single logical Run record needs to span **multiple HTTP requests** served by **potentially different worker processes** over **minutes or hours**. Three concrete cases:
+Use `startRun` + `joinRun` + `endRun` when a single logical Run record needs to span **multiple HTTP requests** served by **potentially different worker processes** over **minutes or hours**, AND the server actually owns the prompt+answer. Two concrete cases:
 
-1. **MCP servers.** One third-party MCP session (keyed by `Mcp-Session-Id`) makes many `tools/call` requests. You want one Run with all tool calls as child spans, not N disconnected Runs.
-2. **Websocket-pinned chats.** Each user message is a separate handler invocation but logically the same conversation.
-3. **Scheduled jobs that resume on a different worker.** A job opens a Run, gets pre-empted, resumes on a different machine.
+1. **Websocket-pinned chats.** Each user message is a separate handler invocation but logically the same conversation, AND the server sees both the user's message and the LLM's reply.
+2. **Scheduled jobs that resume on a different worker.** A job opens a Run, gets pre-empted, resumes on a different machine.
+
+For MCP servers — see [`mcp-runless.md`](./mcp-runless.md). The previous version of this doc included an MCP example here; that guidance was removed because MCP fundamentally can't model the run lifecycle correctly.
 
 If the run can be expressed inside one async function, **prefer `wrapAgent`** — it's one HTTP call to the backend instead of two and keeps the surface area smaller. Don't reach for `startRun`/`endRun` when `wrapAgent` would do.
 
@@ -27,7 +30,7 @@ persist runId            joinRun(runId, ...) → child span
 
 Same `runId` threads through everything. Backend stitches the spans into one timeline under one Run record.
 
-## Node.js example — MCP server
+## Node.js example — websocket-pinned chat
 
 ```typescript
 import trodo from 'trodo-node';
@@ -35,44 +38,36 @@ import { redis } from './redis.js';
 
 trodo.init({ siteId: process.env.TRODO_SITE_ID! });
 
-// Process A — MCP `initialize` handler.
-async function handleInitialize(req: Request) {
-  const sessionId = req.headers.get('mcp-session-id') ?? crypto.randomUUID();
-  const runId = await trodo.startRun('external_mcp_session', {
-    distinctId: req.userId,
-    conversationId: sessionId,
-    metadata: { mcp_client: req.clientLabel, mcp_plan: req.planType },
+// On connection open: mint a run that the whole conversation will append to.
+async function onConnect(ws, userId) {
+  const runId = await trodo.startRun('chat', {
+    distinctId: userId,
+    conversationId: ws.conversationId,
   });
-  await redis.set(`mcp:run:${sessionId}`, runId, 'EX', 3600);
-  return new Response(null, { headers: { 'Mcp-Session-Id': sessionId } });
+  await redis.set(`ws:run:${ws.id}`, runId, 'EX', 86400);
+  ws.runId = runId;
 }
 
-// Process B — MCP `tools/call` handler. Possibly a different worker.
-async function handleToolCall(req: Request, toolName: string, args: unknown) {
-  const sessionId = req.headers.get('mcp-session-id')!;
-  const runId = await redis.get(`mcp:run:${sessionId}`);
-  if (!runId) return null; // session expired or never initialised
-
-  return trodo.joinRun(runId, null, async (span) => {
-    span.setInput({ tool: toolName, params: args });
-    const result = await TOOLS[toolName](args);
-    span.setOutput(result);  // ← FULL payload (Rule 2)
-    if (result.summary) span.setAttribute('summary', String(result.summary));
-    return result;
-  }, { name: `tool.${toolName}`, kind: 'tool' });
+// On each message: append a span (LLM call + any tool calls nested inside).
+async function onMessage(ws, userMessage) {
+  return trodo.joinRun(ws.runId, null, async (span) => {
+    span.setInput({ message: userMessage });
+    const reply = await callLLM(userMessage);
+    span.setOutput({ reply });
+    return reply;
+  }, { name: 'chat.turn', kind: 'agent' });
 }
 
-// Process C — session-end sweeper (Redis TTL expiry, explicit close, etc).
-async function closeMcpSession(sessionId: string, status: 'ok' | 'error' = 'ok') {
-  const runId = await redis.get(`mcp:run:${sessionId}`);
-  if (runId) {
-    await trodo.endRun(runId, { status });
-    await redis.del(`mcp:run:${sessionId}`);
+// On disconnect / explicit close: finalise.
+async function onClose(ws, reason) {
+  if (ws.runId) {
+    await trodo.endRun(ws.runId, { status: reason === 'normal' ? 'ok' : 'error' });
+    await redis.del(`ws:run:${ws.id}`);
   }
 }
 ```
 
-## Python example — MCP server
+## Python example — scheduled job that resumes on a different worker
 
 ```python
 import os, uuid, redis, trodo
@@ -80,41 +75,36 @@ import os, uuid, redis, trodo
 trodo.init(site_id=os.environ["TRODO_SITE_ID"])
 r = redis.Redis(...)
 
-# Process A — MCP `initialize` handler.
-def handle_initialize(req):
-    session_id = req.headers.get("mcp-session-id") or str(uuid.uuid4())
+# Worker A — start the job. May get pre-empted before finishing.
+def start_job(job_id: str, params: dict) -> str:
     run_id = trodo.start_run(
-        "external_mcp_session",
-        distinct_id=str(req.user_id),
-        conversation_id=session_id,
-        metadata={"mcp_client": req.client_label, "mcp_plan": req.plan_type},
+        "ingest_pipeline",
+        conversation_id=job_id,
+        metadata={"params": params},
     )
-    r.set(f"mcp:run:{session_id}", run_id, ex=3600)
-    return {"headers": {"Mcp-Session-Id": session_id}}
+    r.set(f"job:run:{job_id}", run_id, ex=24 * 3600)
+    return run_id
 
-# Process B — MCP `tools/call` handler.
-async def handle_tool_call(req, tool_name, args):
-    session_id = req.headers["mcp-session-id"]
-    raw = r.get(f"mcp:run:{session_id}")
+# Worker B (later, possibly different machine) — resume by re-joining the run.
+async def resume_job(job_id: str):
+    raw = r.get(f"job:run:{job_id}")
     if not raw:
-        return None  # session expired
+        return None  # job expired
     run_id = raw.decode()
-
-    with trodo.join_run(run_id, name=f"tool.{tool_name}", kind="tool") as span:
-        span.set_input({"tool": tool_name, "params": args})
-        result = await TOOLS[tool_name](args)
-        span.set_output(result)  # ← FULL payload (Rule 2)
-        if isinstance(result, dict) and isinstance(result.get("summary"), str):
-            span.set_attribute("summary", result["summary"])
+    with trodo.join_run(run_id, name="resumed_step", kind="agent") as span:
+        result = await do_one_step()
+        span.set_output(result)
         return result
 
-# Process C — sweeper.
-def close_mcp_session(session_id, status="ok"):
-    raw = r.get(f"mcp:run:{session_id}")
+# Final worker — close the job.
+def finish_job(job_id: str, status: str = "ok"):
+    raw = r.get(f"job:run:{job_id}")
     if raw:
         trodo.end_run(raw.decode(), status=status)
-        r.delete(f"mcp:run:{session_id}")
+        r.delete(f"job:run:{job_id}")
 ```
+
+> **Earlier versions of this doc included MCP server examples here.** Those examples are intentionally removed — see the warning at the top of this file. For MCP, use [`mcp-runless.md`](./mcp-runless.md).
 
 ## API reference
 
@@ -149,7 +139,7 @@ Finalises a Run opened by `startRun`. Aggregates any locally-buffered spans for 
 | Pitfall | Symptom | Fix |
 |---|---|---|
 | Forgot to persist `runId` between requests | `endRun` never called → run stuck in `"running"` forever | Persist `runId` in Redis / DB / request scope keyed by your session correlator (e.g. `Mcp-Session-Id`). Always pair `startRun` with a guaranteed `endRun` path (TTL sweeper if no explicit close exists). |
-| Used `wrapAgent` for an MCP server / long session | Each tool call is its own disconnected Run; conversation impossible to reconstruct | Switch to `startRun` + `joinRun` + `endRun`. `wrapAgent` is a single-context-manager block; it can't bridge HTTP requests. |
+| Used `wrapAgent` for a websocket-pinned chat / scheduled job that resumes across workers | Each request is its own disconnected Run; conversation impossible to reconstruct | Switch to `startRun` + `joinRun` + `endRun`. `wrapAgent` is a single-context-manager block; it can't bridge HTTP requests. (For **MCP** specifically — use [`mcp-runless.md`](./mcp-runless.md), not this pattern.) |
 | Passed `runId` to `joinRun` but the Run was never opened with `startRun` first | Spans appear orphaned in the dashboard with no parent Run record | `joinRun` only appends spans — it never creates the Run. You need `startRun` (or a `wrapAgent` from another process holding the run open) somewhere first. |
 | TTL on stored `runId` shorter than the session | Mid-session `tools/call` finds no `runId` → spans dropped | Bump the TTL on every request that touches the session (`r.expire(...)`). Or pick a TTL longer than your worst-case session length. |
 | Called `endRun` twice for the same `runId` | Second call updates the row again — usually harmless but wasteful | Make the close path idempotent at the Redis level (delete the key after `endRun` so re-entry finds no run). |
