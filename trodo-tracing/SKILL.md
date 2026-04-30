@@ -1,6 +1,6 @@
 ---
 name: trodo-tracing
-version: 1.4.0
+version: 1.5.0
 sdk_version_node: ">=2.1.0"
 sdk_version_python: ">=2.1.0"
 sdk_version_node_long_session: ">=2.2.0"
@@ -76,20 +76,41 @@ Inspect imports and file structure before deciding anything:
 
 ## Clarify
 
-Before writing any code, verify you know exactly what to instrument. Ask the user for clarification when any of the following are true:
+> **Ask before deciding.** Even when the codebase makes a choice look obvious, surface it as a confirmation with a recommendation. Imposing the wrong `distinctId` or run boundary is hard to undo later — distinct ids fragment user profiles across runs and MCP spans, and mis-sized run boundaries either hide signal (everything in one giant trace) or destroy it (every step is its own disconnected run).
 
-- **Multiple agent entry points found** — more than one file contains agent/run/pipeline definitions (e.g. `agentA.ts` and `agentB.ts`, or an `agents/` directory with several files).
-- **Multiple frameworks coexist** — e.g. Vercel AI SDK and OpenAI Agents SDK imports both appear in the codebase.
-- **Vague request** — the user said "add tracing" or "instrument my agents" without pointing to specific files or functions.
+Use `AskUserQuestion` when available for these confirmations. Batch the always-ask questions below into a single round before writing any instrumentation code.
+
+### Always ask — even if signals look obvious
+
+These two decisions must be user-confirmed before generating tracing code. Detect candidates first, then surface them with a recommendation.
+
+**1. distinctId source for tracing.** Read auth, session, MCP request, or worker-job code, list every plausible identifier you see, and ask once for the value used across `wrapAgent({ distinctId })`, `track_mcp({ distinct_id })` / `trackMcp({ distinctId })`, `start_run({ distinct_id })`, and any `join_run` callsite. Template:
+
+> "For the `distinctId` attached to runs and spans, I see `req.user.email`, `session.userId` (uuid), and `apiKey.orgId` available. Should I use the same identifier across `wrapAgent`, `track_mcp`, and `start_run`? **Recommend: `session.userId` (uuid)** so it lines up with your events tracking. Alternatives: `email`, `org_id`, or supply your own."
+
+For MCP servers, `track_mcp` / `trackMcp` *requires* `distinct_id` — this question is non-skippable when MCP is in scope. Don't silently fall back to `req.headers['x-user-email']` or the MCP session id; ask.
+
+**2. Run scope / boundary — one wrap or separate.** When multiple logical steps, sub-agents, chained LLM calls, or several agent entrypoints are present, ask which run shape fits:
+
+> "I see three logical steps: `plan()` → `retrieve()` → `answer()`. Three options:
+> - **One outer `wrapAgent('rag-agent', ...)`** — recommended; inner LLM calls become auto-instrumented child spans under one trace. Best when this all runs in one HTTP request.
+> - **Three separate `wrapAgent` runs linked via `parentRunId`** — when each step is independently retriable / cached / triggered.
+> - **`startRun` + `joinRun` + `endRun`** — only when the run spans workers / requests (websocket-pinned chat, scheduled job that resumes on a different worker).
+>
+> Which fits your runtime?"
+
+Default recommendation when the user has no preference: **wrap the outermost entry function only.** Inner provider calls (OpenAI, Anthropic, LangChain, etc.) get auto-instrumented as child spans — no manual `llm()` / `tool()` wrapping needed. Break into separate runs only when the steps are independently triggered (queue consumer per-job, separate HTTP endpoints) or the run is multi-request (websocket / scheduled job → `startRun` / `endRun`). For MCP servers, neither applies — use `track_mcp` per `tools/call` (see §5a).
+
+### Also ask when…
+
+These are situational triggers — fire on top of the always-ask checklist when the signal is present:
+
+- **Multiple agent entry points found** — more than one file contains agent/run/pipeline definitions (e.g. `agentA.ts` and `agentB.ts`, or an `agents/` directory with several files). Ask which to instrument:
+  > "I found agent definitions in `src/agents/chat.ts` and `src/agents/search.ts`. Which one(s) should I instrument, or should I add tracing to all of them?"
+- **Multiple frameworks coexist** — e.g. Vercel AI SDK and OpenAI Agents SDK imports both appear in the codebase:
+  > "I see both Vercel AI SDK (`generateText`) and the OpenAI SDK directly (`openai.chat.completions.create`) used here. Should I instrument both, or just one?"
+- **Vague request** — the user said "add tracing" or "instrument my agents" without pointing to specific files or functions. Combine with the always-ask checklist; don't write a single line until those two are confirmed.
 - **Multiple agent functions in a single file** — several `agent()` / `run()` / chain definitions are present and it's not obvious which should be wrapped.
-
-When any of these apply, **do not guess** — ask once with a concrete, specific question:
-
-> "I found agent definitions in `src/agents/chat.ts` and `src/agents/search.ts`. Which one(s) should I instrument, or should I add tracing to all of them?"
-
-> "I see both Vercel AI SDK (`generateText`) and the OpenAI SDK directly (`openai.chat.completions.create`) used here. Should I instrument both, or just one?"
-
-If none of the above apply — there is exactly one agent, one framework, and the scope is unambiguous — skip this step and proceed directly to the decision tree.
 
 ## Decision tree
 
@@ -150,7 +171,7 @@ The run context propagates inside a single Node/Python process via AsyncLocalSto
 
 `wrapAgent` and `startRun`/`endRun` are both wrong for MCP. The MCP server proxies tool calls but **never sees the user's prompt or the LLM's final answer** — those live inside Claude.ai / Cursor / ChatGPT, deliberately not exposed. So a "run" wrapping an MCP session has nothing meaningful in `input` / `output` and clustering it carries no signal.
 
-→ **Use the `track_mcp` / `trackMcp` SDK helper.** One call per `tools/call`. Requires `trodo-python >= 2.3.0` / `trodo-node >= 2.3.0`.
+→ **Use the `track_mcp` / `trackMcp` SDK helper.** One call per `tools/call`. Requires `trodo-python >= 2.3.0` / `trodo-node >= 2.3.0`. `distinct_id` is required by the helper — confirm the source per Clarify §1 before writing the call. Do not silently fall back to `req.headers['x-user-email']` or the MCP session id if that's not what the user picked.
 
 ```python
 # Python
@@ -388,6 +409,7 @@ Rules the docs mention that assistants routinely miss:
 - **Custom attributes.** Use `trodo.*` prefix (e.g. `trodo.user_id`, `trodo.environment`, `trodo.customer_tier`) for attributes you want filterable in the dashboard. Other prefixes still flow through but aren't indexed the same way.
 - **Nested `wrapAgent` = two runs, not a nested run.** Each `wrapAgent` call starts a new root run. For sub-steps inside an agent, use `trodo.trace(name, fn)` or `trodo.tool(name, fn)`. For a genuine child run linked to a parent, use the `parentRunId` option.
 - **Span status is exception-driven, not output-driven.** `setOutput({ status: 'error' })` / `set_output({"status": "error"})` does NOT mark the span as failed in the dashboard. Whether a span shows "ok" or "failed" is determined entirely by whether an unhandled exception propagated through the context manager or callback. If your code swallows exceptions and returns error objects instead of raising, the span always appears "ok". See pitfalls below for the correct pattern.
+- **Never impose distinctId or run boundary.** Detect candidates from the codebase, then **ask** (per Clarify §1 and §2). Even when only one identifier appears plausible, surface it for confirmation — splitting one user across two profiles across `wrapAgent` and `track_mcp`, or wrapping three independent agents into one trace, is hard to undo. Same rule applies to which agent functions to wrap when multiple entrypoints exist.
 - **CommonJS `require()` and named exports (Node).** When loading `trodo-node` via `require()` rather than ESM `import`, named exports (`propagationHeaders`, `getActiveContext`, `joinRun`, `currentRunId`, `withSpan`) are NOT on `module.default`. Pull them explicitly: `const { propagationHeaders } = require('trodo-node')` or attach them to the singleton after `require`. Any code that does `trodo = trodoModule.default || trodoModule` and then calls `trodo.propagationHeaders()` will throw "not a function" unless the named export is manually attached.
 
 ## Known pitfalls
