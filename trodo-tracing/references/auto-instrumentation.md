@@ -1,6 +1,6 @@
 # Auto-instrumentation — Integration Notes
 
-Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0.
+Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0. Pure-ESM Node fixes shipped in `trodo-node` 2.4.2.
 
 Docs: `https://docs.trodo.ai/agent-analytics/tracing/overview.md`, `https://docs.trodo.ai/agent-analytics/integrations/`.
 
@@ -8,7 +8,9 @@ Docs: `https://docs.trodo.ai/agent-analytics/tracing/overview.md`, `https://docs
 
 ## The one-line version
 
-When `trodo.init()` runs, Trodo registers OpenTelemetry instrumentors for every supported provider that's installed. LLM / tool / retrieval / HTTP calls made inside a `wrapAgent` block become child spans automatically — you do not wrap them.
+When `trodo.init()` runs, Trodo registers OpenTelemetry instrumentors for every supported provider that's installed. **LLM calls** made inside a `wrapAgent` block become child spans automatically — you do not wrap them.
+
+**Tool calls and retrievals are auto-captured ONLY when the framework owns the call site** — LangChain `Tool`, Vercel AI SDK `tools: {...}`, OpenAI Agents SDK, LlamaIndex query engines, Haystack pipelines. With the raw OpenAI / Anthropic / Gemini / Bedrock SDKs in function-calling mode, the provider returns a description of the call (`tool_calls[]`, `tool_use` blocks) and your code dispatches it — there is no library boundary to patch, so you must wrap the tool execution manually with `trodo.tool(name, fn)` or `trodo.withSpan(name, fn, { kind: 'tool' })`. See the per-provider table below.
 
 Default is **on**. Opt out with `autoInstrument: false` (Node) or `auto_instrument=False` (Python).
 
@@ -18,34 +20,35 @@ Default is **on**. Opt out with `autoInstrument: false` (Node) or `auto_instrume
 
 ### Node (`trodo-node`)
 
-| Package | What's captured |
-|---|---|
-| `openai` | `chat.completions.create`, `responses.create`, streaming variants. Model, tokens, temperature, prompt, completion. |
-| `@anthropic-ai/sdk` | `messages.create` + `messages.stream`. Model, tokens, prompt, completion. |
-| `langchain` | Chain + LLM invocations, tool calls inside chains. |
-| `@aws-sdk/client-bedrock-runtime` | `InvokeModelCommand`, `InvokeModelWithResponseStreamCommand`. Per-model-family token extraction. |
-| `cohere-ai` | `chat`, `chatStream`, `generate`. |
-| `@google/generative-ai` | `generateContent`, streaming. Model, tokens, prompt, completion. |
-| `@google-cloud/vertexai` | `generateContent` on Vertex models. |
-| `llamaindex` | Query engine + retriever calls. |
-| `ai` (Vercel AI SDK) | `generateText`, `streamText`, `generateObject`. **Requires** `experimental_telemetry: { isEnabled: true }` on every call — see [`vercel-ai-sdk.md`](./vercel-ai-sdk.md). |
-| `http` / `fetch` | Outbound HTTP as generic spans. Useful for raw LLM endpoints. |
+| Package | LLM call | Tool calls | Notes |
+|---|---|---|---|
+| `openai` (raw) | yes | **manual** | Returns `tool_calls[]`; your code runs the tool. Wrap with `trodo.tool` / `trodo.withSpan({ kind: 'tool' })`. |
+| `@anthropic-ai/sdk` (raw) | yes | **manual** | Returns `tool_use` blocks; same pattern as raw OpenAI. |
+| `langchain` | yes | **auto** | LangChain `Tool` abstraction is patched. |
+| `@aws-sdk/client-bedrock-runtime` | yes | **manual** when used in function-calling mode | Per-model-family token extraction. |
+| `cohere-ai` | yes | **manual** | `chat`, `chatStream`, `generate`. |
+| `@google/generative-ai` | yes | **manual** when used with function calling | `generateContent`, streaming. |
+| `@google-cloud/vertexai` | yes | **manual** when used with function calling | Same as `@google/generative-ai`. |
+| `llamaindex` | yes | **auto** for query-engine tool calls | Retriever calls also auto. |
+| `ai` (Vercel AI SDK) | yes | **auto** for `tools: {...}` | **Requires** `experimental_telemetry: { isEnabled: true }` on every call — see [`vercel-ai-sdk.md`](./vercel-ai-sdk.md). |
+| `@openai/agents` | yes | **auto** | Framework owns tool execution. |
+| `http` / `fetch` | n/a (generic) | n/a | Outbound HTTP as generic spans. Useful for raw LLM endpoints. |
 
 ### Python (`trodo-python`)
 
-| Package | What's captured |
-|---|---|
-| `openai` (v1 + v2) | `chat.completions.create`, `responses.create`, Async variants, streaming. |
-| `anthropic` | `messages.create` + `messages.stream`. |
-| `langchain` / `langchain-core` | Chains, LLM invocations, tool calls. |
-| `llama_index` | Query engine, retriever, LLM calls. |
-| `google.generativeai` | `generate_content`, streaming. |
-| `vertexai` | Gemini / Vertex model calls. |
-| `boto3` (Bedrock) | `invoke_model`, `invoke_model_with_response_stream`. |
-| `cohere` | Chat, generate. |
-| `mistralai` | Chat completions. |
-| `haystack` | Pipeline runs. |
-| `httpx` / `requests` | Outbound HTTP as generic spans. |
+| Package | LLM call | Tool calls | Notes |
+|---|---|---|---|
+| `openai` (v1 + v2, raw) | yes | **manual** | Function calling returns `tool_calls`; your code dispatches. |
+| `anthropic` (raw) | yes | **manual** | `messages.create` returns `tool_use` blocks. |
+| `langchain` / `langchain-core` | yes | **auto** | Chains, LLM invocations, tool calls all patched. |
+| `llama_index` | yes | **auto** for query-engine + retriever |
+| `google.generativeai` | yes | **manual** when using function calling |
+| `vertexai` | yes | **manual** when using function calling |
+| `boto3` (Bedrock) | yes | **manual** when using function calling | `invoke_model`, `invoke_model_with_response_stream`. |
+| `cohere` | yes | **manual** | Chat, generate. |
+| `mistralai` | yes | **manual** | Chat completions. |
+| `haystack` | yes | **auto** | Pipeline runs (components captured). |
+| `httpx` / `requests` | n/a (generic) | n/a | Outbound HTTP as generic spans. |
 
 ---
 
@@ -97,17 +100,28 @@ The current SDK exposes a single boolean `autoInstrument`. There is no per-provi
 
 ## Peer-dep compatibility (Node)
 
-`trodo-node` 2.4.x depends on the OpenTelemetry packages but doesn't pin them tightly. Two upstream changes break the integration silently — auto-instrument throws inside an empty `catch {}`, the global tracer provider stays as `NoopTracerProvider`, and every span is dropped without a log line.
+`trodo-node` depends on the OpenTelemetry packages but doesn't pin them tightly. Some upstream changes break the integration silently on older SDK versions. Use `trodo.init({ debug: true })` on 2.4.2+ to surface peer-dep load errors to stderr.
 
-| Peer dep | Known-good range with trodo-node 2.4.x | Why |
+| Peer dep | Known-good range | Why |
 |---|---|---|
 | `@opentelemetry/api` | `^1.9.0` | stable |
-| `@opentelemetry/sdk-node` | `^0.52.x` | stable |
-| `@opentelemetry/resources` | `^1.x` | 2.x removed the `Resource` class; trodo-node calls `new Resource(...)`, which throws and is swallowed |
+| `@opentelemetry/sdk-node` | `^0.50.x` – `^0.52.x` | trodo-node 2.4.x is exercised against this range; >= 0.53 untested |
+| `@opentelemetry/resources` | `^1.20.0` or `^2.x` | **trodo-node ≥ 2.4.2 feature-detects v1 vs v2** — pass either. **On 2.4.1 or earlier, pin to `^1.x`** — `new Resource(...)` throws against v2 and the error is swallowed. |
 | `@opentelemetry/instrumentation` | `^0.52.x` | stable |
-| `@opentelemetry/instrumentation-openai` | `≤ 0.14.x` | 0.15.0 has a TS-class-field bug that resets histogram fields after `super()`, crashing on the first metric `.record()` |
+| `@opentelemetry/instrumentation-openai` | `≤ 0.14.x` | 0.15.0 has a TS-class-field bug that resets histogram fields after `super()`, crashing on the first metric `.record()`. This is upstream and **still applies on trodo-node 2.4.2** — pin until OTel-contrib fixes the field initialization order. |
 
 Pin these in `package.json` when running the pure-ESM bootstrap (SKILL.md §2a). For Next.js / `@vercel/otel` projects, the Vercel adapter pins compatible versions itself — no action needed. For Path B (`registerOTel({ mode: 'otlp' })`), the SDK install hint covers the required peers; the version pins above still apply if you hit the same symptoms.
+
+### What 2.4.2 fixes vs what's still upstream
+
+| Issue | Pre-2.4.2 | trodo-node ≥ 2.4.2 |
+|---|---|---|
+| `require()` undefined in ESM build (B1) | needs `register.mjs` shim | **fixed internally** via `createRequire(__filename)` |
+| `new Resource(...)` against resources@2.x (B4) | needs Resource shim or v1 pin | **fixed internally** via runtime feature-detect on `resourceFromAttributes` |
+| `span_id` 16-hex vs UUID parent (D1) | causes 500 on `runs/ingest`, runs land with `SPANS=0` | **fixed internally** — OTel-native 16-hex padded to UUID |
+| Silent peer-dep failures | empty `catch {}`; no logs | `trodo.init({ debug: true })` logs to stderr on 2.4.2+ |
+| `instrumentation-openai@0.15.0` class-field bug (B3) | crashes on metric record | **upstream** — still pin to ≤ 0.14.x |
+| `openai/_shims/registry.mjs` × IITM (B5) | `client.fetch === undefined` | **upstream** — still preload `openai/shims/node` if importing `openai` directly |
 
 ---
 

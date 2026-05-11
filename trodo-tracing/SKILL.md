@@ -1,6 +1,6 @@
 ---
 name: trodo-tracing
-version: 1.7.0
+version: 1.8.0
 sdk_version_node: ">=2.1.0"
 sdk_version_python: ">=2.1.0"
 sdk_version_node_long_session: ">=2.2.0"
@@ -8,6 +8,7 @@ sdk_version_python_long_session: ">=2.2.0"
 sdk_version_node_track_mcp: ">=2.3.0"
 sdk_version_python_track_mcp: ">=2.3.0"
 sdk_version_node_register_otel: ">=2.4.0"
+sdk_version_node_pure_esm: ">=2.4.2"
 last_updated: 2026-05-11
 description: >-
   Integrate Trodo agent analytics tracing into a codebase. Detects the user's
@@ -23,9 +24,16 @@ description: >-
   present — prefer the OTLP env-var path (Path A, no SDK install required); see
   §0a.** **For projects with an existing OTel pipeline (Datadog/Jaeger/
   Honeycomb) — use `registerOTel({ mode: 'otlp' })` (Path B, SDK 2.4.0+); see
-  §0b.** **For pure-ESM Node apps (`"type": "module"`) on trodo-node ≤ 2.4.x —
-  use the `--import register.mjs` bootstrap recipe in §2a; the standard inline
-  `init()` is too late under ESM and silently produces SPANS=0.** Specifically
+  §0b.** **For pure-ESM Node apps (`"type": "module"`): trodo-node ≥ 2.4.2
+  works inline (only preload `openai/shims/node` if importing the raw OpenAI
+  SDK); on ≤ 2.4.1 use the `--import register.mjs` bootstrap recipe in §2a.**
+  **Raw provider SDK tool calls are NOT auto-instrumented — auto-capture
+  applies to LLM calls always, and to tool calls only when the framework owns
+  the call site (LangChain Tool, Vercel AI SDK tools, OpenAI Agents SDK,
+  LlamaIndex query engine, Haystack pipeline). For raw OpenAI / Anthropic /
+  Gemini / Bedrock function calling, wrap the local tool execution with
+  trodo.tool() or trodo.withSpan({ kind: 'tool' }) — see §2 table.**
+  Specifically
   enforces three output-capture rules: (1) await the full result before
   setOutput so streamed replies aren't truncated, (2) put the FULL structured
   payload in span output and surface short summaries as setAttribute(...)
@@ -219,7 +227,24 @@ This is the common case. Trodo auto-instruments these providers when `trodo.init
 2. **Init once** at the app entrypoint, before any provider client is imported or instantiated: `trodo.init({ siteId: process.env.TRODO_SITE_ID })` / `trodo.init(site_id=os.environ["TRODO_SITE_ID"])`.
 3. **Wrap the agent entry function** with `wrapAgent(name, fn, opts?)` / `wrap_agent(name, ...)`.
 
-No OpenInference. No manual `llm()` wrapping. The provider's LLM calls, tool calls, and retrieval calls nest under the run automatically.
+#### What "auto-instrumented" actually covers
+
+The provider's **LLM call** (`chat.completions.create`, `messages.create`, `generateText`, etc.) becomes a nested span automatically. **Tool spans are a different story** — what's captured depends on whether the framework owns the tool-call site:
+
+| Provider / framework | LLM call auto-captured? | Tool spans auto-captured? |
+|---|---|---|
+| `langchain` / `langchain-core` (Node + Python) | yes | **yes** — LangChain's `Tool` abstraction is patched |
+| Vercel AI SDK (`ai`) with `tools: {...}` and `experimental_telemetry: { isEnabled: true }` | yes | **yes** — the SDK owns the call site and emits tool spans |
+| OpenAI Agents SDK (`@openai/agents` / `openai-agents`) | yes | **yes** — the framework owns tool execution |
+| `llamaindex` / `llama_index` | yes | **yes** for query-engine tool calls |
+| Haystack pipelines (Python) | yes | **yes** for pipeline-component invocations |
+| **Raw OpenAI** (`openai.chat.completions.create` with `tools: [...]`) | yes | **no** — the SDK returns a `tool_calls[]` array; your code runs the tool. There is no provider boundary to patch. Wrap with `trodo.tool(name, fn)` or `trodo.withSpan(name, fn, { kind: 'tool' })`. |
+| **Raw Anthropic** (`anthropic.messages.create` with `tools: [...]`) | yes | **no** — same as raw OpenAI; the SDK returns `tool_use` blocks and your code dispatches. Wrap manually. |
+| **Raw Gemini / Vertex / Bedrock / Cohere / Mistral with function calling** | yes | **no** — same pattern. Wrap manually. |
+
+> **The rule:** auto-instrumentation patches what the library executes. If the provider returns a *description* of a tool call for your code to run (raw OpenAI / Anthropic / Gemini / Bedrock function calling), the tool execution is not in the provider's library and there is nothing to patch. Wrap it manually with `trodo.tool(name, fn)` (factory) or `trodo.withSpan(name, fn, { kind: 'tool' })` (inline). See §3.
+
+No OpenInference. No manual `llm()` wrapping for the LLM call itself when a provider above is in the list.
 
 → Read: `https://docs.trodo.ai/llms.txt`, find the matching `integrations/<framework>.md`, fetch and read before writing code.
 
@@ -227,25 +252,54 @@ No OpenInference. No manual `llm()` wrapping. The provider's LLM calls, tool cal
 
 → If **streaming** detected: also read [`references/streaming.md`](./references/streaming.md).
 
-### 2a. Pure-ESM Node app (`"type": "module"`) on `trodo-node` ≤ 2.4.x?
+### 2a. Pure-ESM Node app (`"type": "module"`)?
 
-Pure-ESM Node has three bootstrap pitfalls that don't surface in CJS or Next.js. Until trodo-node ships a pure-ESM build, use this recipe verbatim — the standard "init at top of entry file" from §2 silently produces `SPANS=0`.
+**First — check the installed SDK version.** trodo-node `2.4.2` fixes three of the four pure-ESM bootstrap pitfalls internally:
+
+- B1 (bare `require()` in ESM build) — fixed via `createRequire(__filename)` shim.
+- B4 (`new Resource(...)` against `@opentelemetry/resources@2.x`) — fixed via runtime feature detection.
+- D1 (`span_id` UUID-vs-hex mismatch causing 500s on ingest) — fixed via 16-hex → UUID padding.
+
+On `trodo-node >= 2.4.2`, the **standard §2 install works as-is** for most pure-ESM apps. Only B5 (the IITM × `openai/_shims/registry.mjs` interaction) still needs a one-line preload, and only when you import `openai` directly. See "Lean recipe" below.
+
+If you're still on `trodo-node <= 2.4.1`, use the "Full recipe (legacy SDK)" further down.
 
 → **Detection signals:** `package.json` has `"type": "module"`, no Next.js / Vercel adapter, files use `import` syntax, entry script is run as `node index.js` (not `next start`).
 
-→ **Symptoms if any of the three is missed:** runs appear in the dashboard with `SPANS=0` (auto-instrument silently registered nothing because `require` is undefined or `Resource` threw), **or** the first OpenAI call throws `Cannot read properties of undefined (reading 'call')` deep in `openai/core.mjs` (IITM broke the shim mutate-let-export), **or** debug logs show `NoopTracerProvider` even after `trodo.init()` returned.
+→ **Symptoms:**
+- **On trodo-node ≤ 2.4.1**: runs appear in the dashboard with `SPANS=0` (auto-instrument silently registered nothing because `require` is undefined or `Resource` threw), **or** ingest returns 500 because child OTel span ids are 16-hex while the parent is UUID, **or** debug logs show `NoopTracerProvider` even after `trodo.init()` returned.
+- **On trodo-node ≥ 2.4.2 with raw `openai` import**: first OpenAI call throws `Cannot read properties of undefined (reading 'call')` deep in `openai/core.mjs` because IITM broke `openai/_shims/registry.mjs`'s mutate-let-export pattern. (This one is upstream, not in our SDK.)
 
-→ **Fix:** create `register.mjs` next to your entry file and run with `node --import ./register.mjs index.js`.
+#### Lean recipe (trodo-node ≥ 2.4.2)
+
+If you're using the raw `openai` SDK, you still need to preload its Node shims so IITM doesn't leave `client.fetch === undefined`. Everything else now works inline.
+
+```js
+// register.mjs
+await import('openai/shims/node');           // only needed if you import 'openai' directly
+const trodo = (await import('trodo-node')).default;
+trodo.init({ siteId: process.env.TRODO_SITE_ID, debug: true });   // debug surfaces peer-dep issues
+```
+
+```bash
+node --import ./register.mjs index.js
+```
+
+If you don't use raw `openai` (e.g. Anthropic SDK only, LangChain only, Vercel AI SDK only), you can skip `register.mjs` entirely and just `import trodo from 'trodo-node'; trodo.init({ siteId })` at the top of your entry file — provided that import precedes any provider import.
+
+#### Full recipe (trodo-node ≤ 2.4.1)
+
+Until you can upgrade, paste this verbatim and run with `node --import ./register.mjs index.js`.
 
 ```js
 // register.mjs
 import { register } from 'node:module';
 import { createRequire } from 'node:module';
 
-// 1. require shim — trodo-node 2.4.x's ESM build uses bare `require(...)`
+// 1. require shim — trodo-node ≤ 2.4.1's ESM build uses bare `require(...)`
 //    to lazy-load OTel peer deps; pure ESM has no `require` global, so
 //    autoInstrument throws ReferenceError into an empty `catch {}` and
-//    registers zero instrumentations.
+//    registers zero instrumentations. (Fixed in 2.4.2.)
 globalThis.require = createRequire(import.meta.url);
 
 // 2. Register the OTel ESM loader hook BEFORE any application module
@@ -265,20 +319,13 @@ const trodo = (await import('trodo-node')).default;
 trodo.init({ siteId: process.env.TRODO_SITE_ID });
 ```
 
-**Run it:**
-```bash
-node --import ./register.mjs index.js
-```
+**Peer-dep pins for the legacy recipe** (no longer required on 2.4.2, but listed for users stuck on 2.4.1):
+- `@opentelemetry/instrumentation-openai` ≤ 0.14.x — 0.15.0 has a TS-class-field bug that resets histogram fields after `super()` and crashes on the first metric `.record()`. Still upstream — pin even on 2.4.2.
+- `@opentelemetry/resources` ^1.x — 2.x removed the `Resource` class. **Not needed on 2.4.2** (the SDK feature-detects), but required on 2.4.1.
 
-→ **Then in your app code,** `await` the top-level `wrapAgent(...)` call (or any function that contains it) and `await trodo.shutdown()` before the script exits — see "Short-lived scripts / pure-ESM scripts" under §1 of "When things go wrong". An unawaited `wrapAgent()` will let `beforeExit` fire mid-POST and the run never lands in the dashboard, even though the recipe above is correct.
+If you cannot downgrade these peer deps on 2.4.1, paste the `Resource` and `OpenAIInstrumentation` shims from `references/auto-instrumentation.md` §"ESM bootstrap workarounds" into `register.mjs` between steps 1 and 4.
 
-→ **Peer-dep pins for this path** (full list + workarounds in `references/auto-instrumentation.md` §"Peer-dep compatibility"):
-- `@opentelemetry/instrumentation-openai` ≤ 0.14.x — 0.15.0 has a TS-class-field bug that resets histogram fields after `super()` and crashes on the first metric `.record()`.
-- `@opentelemetry/resources` ^1.x — 2.x removed the `Resource` class that trodo-node 2.4.1 still constructs via `new Resource(...)`. The constructor throws into the same swallowed `catch {}` as B1, the global tracer provider stays `NoopTracerProvider`, and every span is dropped.
-
-If you cannot downgrade these peer deps, paste the `Resource` and `OpenAIInstrumentation` shims from `references/auto-instrumentation.md` §"ESM bootstrap workarounds" into `register.mjs` between steps 1 and 4.
-
-→ **When trodo-node ships a pure-ESM build, this whole recipe collapses to the standard §2 install.** Track the SDK version field at the top of this skill — when `sdk_version_node_pure_esm` appears, switch users to the new path.
+→ **In all cases:** `await` the top-level `wrapAgent(...)` call (or any function that contains it) and `await trodo.shutdown()` before the script exits — see "Short-lived scripts / pure-ESM scripts" under §1 of "When things go wrong". An unawaited `wrapAgent()` will let `beforeExit` fire mid-POST and the run never lands in the dashboard, even with a correct bootstrap.
 
 ### 3. No matching framework / raw HTTP to an LLM?
 
@@ -567,7 +614,9 @@ Finally: tell the user to set `TRODO_SITE_ID` in their `.env` (server-only, no `
 
 Rules the docs mention that assistants routinely miss:
 
-- **Init before client import.** `trodo.init()` must run before any provider client is imported or instantiated. Auto-instrumentation patches provider SDKs at init time — a client imported earlier holds an unpatched reference and emits no child spans. In CJS, put `init()` at the top of the entry file. In Next.js, put it inside `instrumentation.ts` → `register()`, guarded by `process.env.NEXT_RUNTIME === "nodejs"`. **In pure ESM (`"type": "module"`) on trodo-node ≤ 2.4.x, init from inside the entry module is too late — Node has already linked the import graph (including `openai`) before any module body runs. Use the `--import register.mjs` recipe in §2a; running `trodo.init()` from `index.js` will silently leave provider SDKs unpatched.**
+- **Init before client import.** `trodo.init()` must run before any provider client is imported or instantiated. Auto-instrumentation patches provider SDKs at init time — a client imported earlier holds an unpatched reference and emits no child spans. In CJS, put `init()` at the top of the entry file. In Next.js, put it inside `instrumentation.ts` → `register()`, guarded by `process.env.NEXT_RUNTIME === "nodejs"`. In pure ESM (`"type": "module"`), the import graph is already linked before any module body runs — if you import `openai`/`anthropic`/etc. in the same file as `trodo.init()`, init runs after those modules are linked. **Workaround on trodo-node ≤ 2.4.1: use the `--import register.mjs` recipe in §2a. On 2.4.2+ this is largely fixed, but for the raw `openai` SDK you still need `await import('openai/shims/node')` before importing `openai` due to the upstream IITM/openai-shims interaction.**
+- **Tool spans for raw provider SDKs are NOT automatic.** Auto-instrumentation captures the LLM call (`chat.completions.create`, `messages.create`, etc.) but **not** the tool execution when you use raw OpenAI / Anthropic / Gemini / Bedrock function calling — the SDK returns `tool_calls[]` / `tool_use` blocks and your own JS/Python code dispatches them. Wrap the dispatch with `trodo.tool(name, fn)` (factory) or `trodo.withSpan(name, fn, { kind: 'tool' })` (inline). Frameworks with a tool abstraction (LangChain, Vercel AI SDK `tools: {...}`, OpenAI Agents SDK, LlamaIndex query engine, Haystack) DO auto-capture tool spans — see §2 table.
+- **Use `debug: true` to see why auto-instrument isn't loading.** On trodo-node ≥ 2.4.2, `trodo.init({ siteId, debug: true })` logs every peer-dep load failure, `Resource` construction failure, and per-instrumentation factory error to stderr. Use this whenever runs land with `SPANS=0` and the integration looks correct — the line will tell you exactly which package failed to load.
 - **Vercel AI SDK — every call.** `experimental_telemetry: { isEnabled: true }` must appear on every `generateText` / `streamText` / `generateObject` call. Missing it on even one call means that call produces no child spans.
 - **Env vars are server-only.** `TRODO_SITE_ID` is read at runtime on the server. Never prefix it with `NEXT_PUBLIC_` / `VITE_` / `PUBLIC_` — that embeds it in the client bundle where it's both unnecessary and wrong (auto-instrument runs in Node, not the browser).
 - **Streaming output.** Call `run.setOutput(text)` / `run.set_output(text)` in the framework's finish callback (`onFinish` for Vercel AI SDK), **not** inside the for-await loop that consumes the stream. Calling it mid-loop records a partial value.
@@ -595,6 +644,8 @@ Rules the docs mention that assistants routinely miss:
 | `propagationHeaders` is not a function (Node CommonJS) | `TypeError: trodo.propagationHeaders is not a function` at runtime | `propagationHeaders` is a **named export**, not on the default export. With `require()`: `const { propagationHeaders } = require('trodo-node')` — or after loading the module, attach it: `trodo.propagationHeaders = trodoModule.propagationHeaders`. |
 | `run.setAttribute is not a function` (inside `wrapAgent` / `joinRun` callback) | `TypeError: run.setAttribute is not a function` thrown the first time you tag a run with metadata | `RunHandle` only exposes `setInput`, `setOutput`, `setMetadata`. `setAttribute` lives on `SpanHandle` (returned by `withSpan`). Replace `run.setAttribute('model', 'gpt-4o-mini')` with `run.setMetadata({ model: 'gpt-4o-mini', tool_call_count: n })` — bulk-set in one call. See "Handle reference" above. |
 | Returned a `tool()` / `llm()` / `retrieval()` wrapper instead of calling it | Console shows `[AsyncFunction (anonymous)]`; no tool span; downstream code receives the wrapper, not the result | `tool('x', fn)` is a **factory** that returns a callable — it does not execute `fn`. Either store and call (`const wrapped = trodo.tool('x', fn); await wrapped(args)`) or switch to `trodo.withSpan('x', () => fn(args), { kind: 'tool' })` for one-shot use. |
+| Raw OpenAI / Anthropic / Gemini tool calls not appearing as tool spans | LLM span shows up under the run waterfall but the actual tool execution (e.g. `getWeather()`) emits nothing — no `kind: 'tool'` child span | Raw provider SDKs are NOT framework-level: the SDK returns `tool_calls[]` / `tool_use` blocks and your code dispatches. Auto-instrumentation patches the LLM call, not your dispatcher. Wrap the dispatch with `trodo.tool(name, fn)` (factory) or `trodo.withSpan(name, fn, { kind: 'tool' })` (inline). LangChain / Vercel AI SDK `tools: {...}` / OpenAI Agents SDK DO auto-capture — see §2 table. |
+| Runs land with `SPANS=0` on pure-ESM Node, but bootstrap looks correct | Either trodo-node ≤ 2.4.1 (B1/B4/D1 still in play) or peer-dep load is failing silently on any version | First, upgrade to `trodo-node@2.4.2` (fixes B1, B4, D1). Then run with `trodo.init({ debug: true })` — the SDK now logs every peer-dep / Resource / instrumentation load failure to stderr, telling you exactly which package is misbehaving. |
 | Pure-ESM Node entry script: runs appear with `SPANS=0`, or first OpenAI call throws `Cannot read properties of undefined (reading 'call')` in `openai/core.mjs` | trodo-node 2.4.x's ESM build can't bootstrap from inside the entry module — `require` is undefined, the OTel loader hook is registered too late, and IITM breaks `openai/_shims/registry.mjs` | Use the `--import register.mjs` recipe in §2a. The recipe shims `require`, registers the OTel hook before any user import, and pre-loads `openai/shims/node`. |
 | Short-lived ESM script exits before `runs/ingest` POST completes — terminal looks fine, dashboard never gets the run | `wrapAgent(...)` was called without `await` at the top level; `beforeExit` fired during the ingest HTTP and the process exited mid-POST. `trodo.shutdown()` only flushes the batch queue — it does NOT await in-flight HTTP. | `await` the top-level `wrapAgent(...)` call and `await trodo.shutdown()` before exit. Long-running servers don't hit this; only CLI / pure-ESM scripts do. |
 | `setOutput` / `set_output` with metadata instead of real data | Dashboard shows `{ answerLength: 478 }` or `{ status: "ok" }` — not useful for debugging | Pass the actual payload: `setOutput({ answer: text })` for LLM outputs; `set_output({"status": status, "data": raw_or_full_dict})` for tool spans. Trodo truncates at 64KB on the server — don't pre-summarize into useless counts or flags. |
