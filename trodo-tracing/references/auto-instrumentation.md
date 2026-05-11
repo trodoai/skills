@@ -92,3 +92,56 @@ The current SDK exposes a single boolean `autoInstrument`. There is no per-provi
 - **`autoInstrument: false` set.** Check the `init()` call site.
 - **Raw `fetch` to a provider URL.** `fetch` is captured as a generic HTTP span, but without provider-specific token/model extraction. Use `trodo.trackLlmCall()` after the fetch to record it as an LLM span with tokens.
 - **Custom-wrapped clients.** If the user has their own HOF wrapping `openai.chat.completions.create`, the wrapper may capture the unpatched method reference at module load. Patch at the client instance level (e.g. `const openai = new OpenAI()` after init) instead of at the method level.
+
+---
+
+## Peer-dep compatibility (Node)
+
+`trodo-node` 2.4.x depends on the OpenTelemetry packages but doesn't pin them tightly. Two upstream changes break the integration silently — auto-instrument throws inside an empty `catch {}`, the global tracer provider stays as `NoopTracerProvider`, and every span is dropped without a log line.
+
+| Peer dep | Known-good range with trodo-node 2.4.x | Why |
+|---|---|---|
+| `@opentelemetry/api` | `^1.9.0` | stable |
+| `@opentelemetry/sdk-node` | `^0.52.x` | stable |
+| `@opentelemetry/resources` | `^1.x` | 2.x removed the `Resource` class; trodo-node calls `new Resource(...)`, which throws and is swallowed |
+| `@opentelemetry/instrumentation` | `^0.52.x` | stable |
+| `@opentelemetry/instrumentation-openai` | `≤ 0.14.x` | 0.15.0 has a TS-class-field bug that resets histogram fields after `super()`, crashing on the first metric `.record()` |
+
+Pin these in `package.json` when running the pure-ESM bootstrap (SKILL.md §2a). For Next.js / `@vercel/otel` projects, the Vercel adapter pins compatible versions itself — no action needed. For Path B (`registerOTel({ mode: 'otlp' })`), the SDK install hint covers the required peers; the version pins above still apply if you hit the same symptoms.
+
+---
+
+## ESM bootstrap workarounds (newer peer deps)
+
+If you cannot downgrade the OTel peer deps, add these patches to `register.mjs` (SKILL.md §2a) **after** the `globalThis.require` shim and **before** the `await import('trodo-node')` line. Both are no-ops on the known-good peer-dep ranges, so it's safe to ship them defensively.
+
+**Resource shim** — restores the `new Resource(...)` constructor that trodo-node 2.4.1 expects. Returning an object from a constructor is legal JS — the engine uses the returned value instead of `this`:
+
+```js
+const resMod = globalThis.require('@opentelemetry/resources');
+if (typeof resMod.Resource !== 'function' && typeof resMod.resourceFromAttributes === 'function') {
+  class ResourceShim {
+    constructor(attrs = {}) { return resMod.resourceFromAttributes(attrs); }
+  }
+  Object.defineProperty(resMod, 'Resource', {
+    value: ResourceShim, writable: true, enumerable: true, configurable: true,
+  });
+}
+```
+
+**OpenAI instrumentation subclass** — re-runs `_updateMetricInstruments()` after the subclass field initializers blow away the parent's setup. The parent constructor populates the histogram fields, then the subclass's class-field declarations run (they execute *after* `super()` returns) and reset those fields to `undefined`; the next metric `.record()` call crashes:
+
+```js
+const oaiMod = globalThis.require('@opentelemetry/instrumentation-openai');
+if (oaiMod.OpenAIInstrumentation && !oaiMod.OpenAIInstrumentation.__trodoPatched) {
+  class Patched extends oaiMod.OpenAIInstrumentation {
+    constructor(...args) { super(...args); this._updateMetricInstruments(); }
+  }
+  Patched.__trodoPatched = true;
+  Object.defineProperty(oaiMod, 'OpenAIInstrumentation', {
+    value: Patched, writable: true, enumerable: true, configurable: true,
+  });
+}
+```
+
+Both `Object.defineProperty` calls are required — TS-compiled module exports are read-only getters, so direct assignment (`mod.Resource = ResourceShim`) silently no-ops.

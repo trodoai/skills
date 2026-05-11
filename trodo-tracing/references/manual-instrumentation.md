@@ -18,13 +18,22 @@ Prefer auto-instrumentation when it covers the provider (see [`auto-instrumentat
 
 ## The four helpers
 
+> **These are wrapper factories, not inline executors.** `tool('x', fn)` does **not** call `fn`. It returns a **new callable** that, when invoked with the actual arguments, opens a span and runs `fn` inside it. You must call the returned callable to do any work and emit a span — assigning it to a variable and never calling it is a no-op (and a frequent bug: the wrapper logs as `[AsyncFunction (anonymous)]` if returned to a caller expecting the real result). For inline / one-shot use without a factory, prefer `trodo.withSpan(name, fn, { kind })` — see "Raw `withSpan`" below.
+
 ```ts
 import { tool, llm, retrieval, trace } from 'trodo-node';
 
+// These return callables — none of them runs the inner fn yet.
 const search   = retrieval('vector-search', (q: string) => vectorDB.search(q, { topK: 5 }));
 const lookup   = tool('lookup-order',       (id: string) => db.orders.findById(id));
 const generate = llm('answer', callOllama,  { model: 'llama3.1:70b', provider: 'ollama' });
 const format   = trace('format-output',     (raw: string) => raw.trim());
+
+// Each call below executes the inner fn and emits one span.
+const docs    = await search('how do refunds work?');
+const order   = await lookup('order-123');
+const answer  = await generate({ prompt: 'summarise these docs' });
+const cleaned = format(answer.text);
 ```
 
 Semantics identical in Python:
