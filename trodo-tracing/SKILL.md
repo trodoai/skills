@@ -9,7 +9,7 @@ sdk_version_node_track_mcp: ">=2.3.0"
 sdk_version_python_track_mcp: ">=2.3.0"
 sdk_version_node_register_otel: ">=2.4.0"
 sdk_version_node_pure_esm: ">=2.4.2"
-last_updated: 2026-05-11
+last_updated: 2026-05-13
 description: >-
   Integrate Trodo agent analytics tracing into a codebase. Detects the user's
   language, framework, and existing OTel setup to pick the correct integration
@@ -177,8 +177,32 @@ const result = await generateText({
 → **Where users get the site_id:** dashboard → Integration Manager (same value as `trodo.init({ siteId })`). The Bearer token IS the site_id; there is no separate API key.
 
 → **Pitfalls:**
-- `experimental_telemetry.isEnabled: true` is required on every Vercel AI call — without it, no spans emit.
-- The OTel exporter is server-side only; `NEXT_RUNTIME === 'nodejs'` guard your `register()` if you don't want it on Edge.
+- `experimental_telemetry.isEnabled: true` is required on every Vercel AI call — without it, no spans emit. This is the single most common reason a Next.js / Vercel AI SDK app shows zero spans.
+- **Never import `trodo-node` at the top of `instrumentation.ts`.** Next.js compiles `instrumentation.ts` for BOTH the Node runtime and the Edge runtime, even if `register()` checks `NEXT_RUNTIME === 'nodejs'`. The Edge bundler still has to resolve static top-level imports — and `trodo-node` pulls in `@opentelemetry/sdk-node`, `instrumentation-http`, `instrumentation-fs`, etc. that aren't Edge-compatible. `serverExternalPackages` does NOT fix this (Node-bundling only). Use the dynamic-import split below.
+
+```ts
+// instrumentation.ts — TOP LEVEL imports must stay Edge-safe.
+export async function register() {
+  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  const mod = await import('@/lib/node-instrumentation');
+  await mod.registerNodeInstrumentation();
+}
+```
+
+```ts
+// lib/node-instrumentation.ts — only loaded on the Node runtime.
+import trodo from 'trodo-node';
+import { registerOTel as registerVercelOTel } from '@vercel/otel';
+
+export async function registerNodeInstrumentation() {
+  registerVercelOTel({ serviceName: 'support-bot' });
+  // autoInstrument:false because @vercel/otel already owns the OTel SDK
+  // and the AI-SDK spans flow through it. Trodo just observes via OTLP
+  // export — no duplicate NodeSDK.
+  trodo.init({ siteId: process.env.TRODO_SITE_ID, autoInstrument: false });
+}
+```
+
 - If you ALSO want the SDK's `wrapAgent` / `feedback` API on top of this, install `trodo-node` and call `registerOTel({ mode: 'otlp', siteId })` instead — see §0b. They coexist; auto-instrumented spans still go through OTLP.
 
 ### 0b. Existing OTel pipeline (Datadog / Jaeger / Honeycomb), and user wants Trodo as ALSO a destination?
@@ -223,9 +247,26 @@ This is the common case. Trodo auto-instruments these providers when `trodo.init
 
 → If detected, the full integration is three things:
 
-1. **Install** `trodo-node` (Node) or `trodo-python` (Python).
+1. **Install** `trodo-node` (Node) or `trodo-python` (Python). Recommended minimum: `trodo-node >= 2.4.3` / `trodo-python >= 2.4.1` — earlier versions emit fractional `duration_ms` on bridged OTel spans, which 500s the ingest, and lose Anthropic LLM spans when fetch/undici clobbers the async context.
 2. **Init once** at the app entrypoint, before any provider client is imported or instantiated: `trodo.init({ siteId: process.env.TRODO_SITE_ID })` / `trodo.init(site_id=os.environ["TRODO_SITE_ID"])`.
 3. **Wrap the agent entry function** with `wrapAgent(name, fn, opts?)` / `wrap_agent(name, ...)`.
+
+→ **Default-mode OTel peer deps.** `trodo-node` ships the bridge but not the OTel SDK or per-provider instrumentation packages — those are optional peers, so users with no LLM auto-tracing don't have to pay the install cost. **If you want LLM spans auto-captured, install the matching peers explicitly:**
+
+```bash
+# Base OTel runtime (required for any auto-instrumentation):
+npm install --save-optional @opentelemetry/api @opentelemetry/sdk-node @opentelemetry/resources @opentelemetry/sdk-trace-base
+
+# Per-provider — install only the ones your app uses:
+#   Anthropic — published under @traceloop, alias to the @opentelemetry/ name:
+npm install --save-optional @opentelemetry/instrumentation-anthropic@npm:@traceloop/instrumentation-anthropic
+#   OpenAI (raw or via Vercel AI):
+npm install --save-optional @opentelemetry/instrumentation-openai
+#   LangChain / LlamaIndex / Bedrock / Cohere / Google GenAI / VertexAI / etc.:
+npm install --save-optional @opentelemetry/instrumentation-langchain @opentelemetry/instrumentation-llamaindex
+```
+
+On `trodo-node >= 2.4.3`, missing peers emit a one-shot stderr warning at `init()` time naming the package and the install command — so "I installed Trodo but see no LLM spans" surfaces immediately instead of silently. Suppress with `init({ siteId, silent: true })` if you intentionally don't want auto-instrumentation for an installed provider.
 
 #### What "auto-instrumented" actually covers
 
@@ -272,13 +313,40 @@ If you're still on `trodo-node <= 2.4.1`, use the "Full recipe (legacy SDK)" fur
 
 #### Lean recipe (trodo-node ≥ 2.4.2)
 
-If you're using the raw `openai` SDK, you still need to preload its Node shims so IITM doesn't leave `client.fetch === undefined`. Everything else now works inline.
+If you're using the raw `openai` SDK, you may need to preload its Node shims so IITM doesn't leave `client.fetch === undefined`. **Critical:** the shim registry throws on re-init (`can't import 'openai/shims/node' after import 'openai/shims/node'`), so the preload MUST be guarded — recent `openai` versions auto-wire the shims at module load.
+
+**Order matters: OTel IITM hook FIRST → shims (try/catch) → require shim → trodo.** The hook must be registered before any `await import('openai/...')` is issued — IITM patches modules as they are loaded, so registering the hook after the shim import means the shims load un-intercepted and `getDefaultAgent` can end up undefined. Registering the hook first, then loading shims, works correctly because IITM wraps the shim at load time with the registry already in place.
 
 ```js
 // register.mjs
-await import('openai/shims/node');           // only needed if you import 'openai' directly
+import { register } from 'node:module';
+import { createRequire } from 'node:module';
+
+// 1. Register the OTel IITM loader hook FIRST — before any openai/* import.
+//    IITM patches modules as they are loaded. If you import openai/shims/node
+//    before registering the hook, that module loads un-intercepted and
+//    IITM's later patching of openai internals can leave getDefaultAgent
+//    undefined. Putting this first ensures every subsequent openai/* import
+//    is intercepted correctly.
+register('@opentelemetry/instrumentation/hook.mjs', import.meta.url);
+
+// 2. OpenAI Node shims, guarded. On openai >= 4.x the shims auto-wire from
+//    the bare `import OpenAI from 'openai'`, in which case this preload
+//    triggers the registry's "shims already set" error. Swallow it — the
+//    runtime is in the correct state either way.
+try {
+  await import('openai/shims/node');
+} catch (e) {
+  if (!/shims/.test(String(e))) throw e;  // unrelated error — re-throw
+}
+
+// 3. require shim (harmless on 2.4.2+, required on 2.4.1).
+globalThis.require = createRequire(import.meta.url);
+
+// 4. Now safe to init Trodo. debug:true surfaces peer-dep issues; silent:true
+//    suppresses the always-on missing-instrumentation warnings.
 const trodo = (await import('trodo-node')).default;
-trodo.init({ siteId: process.env.TRODO_SITE_ID, debug: true });   // debug surfaces peer-dep issues
+trodo.init({ siteId: process.env.TRODO_SITE_ID, debug: true });
 ```
 
 ```bash
@@ -319,7 +387,40 @@ const trodo = (await import('trodo-node')).default;
 trodo.init({ siteId: process.env.TRODO_SITE_ID });
 ```
 
-**Peer-dep pins for the legacy recipe** (no longer required on 2.4.2, but listed for users stuck on 2.4.1):
+**Peer-dep version pins — apply on ALL versions (2.4.1 and 2.4.2+):**
+
+```bash
+# The OTel SDK family must all be from the same semver generation.
+# sdk-node@^0.52.x is the latest stable line that the trodo-node peer-dep range
+# targets. The instrumentation packages (@traceloop/instrumentation-openai,
+# @traceloop/instrumentation-anthropic, @opentelemetry/instrumentation-openai)
+# internally import from @opentelemetry/core / @opentelemetry/sdk-trace-base.
+# If those transitive deps resolve to a different major/minor than your sdk-node
+# (e.g. instrumentation-openai@0.14.6 pulls in @opentelemetry/core@1.30.x while
+# sdk-node@0.52.x expects @opentelemetry/core@1.28.x), spans silently drop or
+# the SDK errors at startup with "incompatible opentelemetry API version".
+# Pin the entire OTel family to a single patch-compatible range:
+npm install --save-exact \
+  @opentelemetry/api@1.9.0 \
+  @opentelemetry/sdk-node@0.52.1 \
+  @opentelemetry/sdk-trace-base@1.25.1 \
+  @opentelemetry/resources@1.25.1 \
+  @opentelemetry/core@1.28.0
+```
+
+If you can't use `--save-exact`, add `overrides` / `resolutions` in `package.json` so nested deps can't pull in a newer generation:
+
+```json
+{
+  "overrides": {
+    "@opentelemetry/api": "1.9.0",
+    "@opentelemetry/core": "1.28.0",
+    "@opentelemetry/sdk-trace-base": "1.25.1",
+    "@opentelemetry/resources": "1.25.1"
+  }
+}
+```
+
 - `@opentelemetry/instrumentation-openai` ≤ 0.14.x — 0.15.0 has a TS-class-field bug that resets histogram fields after `super()` and crashes on the first metric `.record()`. Still upstream — pin even on 2.4.2.
 - `@opentelemetry/resources` ^1.x — 2.x removed the `Resource` class. **Not needed on 2.4.2** (the SDK feature-detects), but required on 2.4.1.
 
@@ -656,7 +757,12 @@ Rules the docs mention that assistants routinely miss:
 | Used `wrapAgent` for an MCP server | Every `tools/call` becomes its own disconnected Run; the synthetic Run carries no input/output because the MCP server never sees the user's prompt or the LLM's answer | Switch to `trodo.track_mcp(...)` (Python) / `trodo.trackMcp({...})` (Node) — one runless span per `tools/call`, no parent run. Requires SDK >= 2.3.0. See [`references/mcp-runless.md`](./references/mcp-runless.md). |
 | Used `startRun` / `endRun` for an MCP server | Runs stuck in `running` (no clean session-end signal in MCP); spans threaded into a Run that has no meaningful prompt/answer to anchor them | Same fix — switch to `track_mcp` / `trackMcp`. `startRun`/`endRun` is correct for websocket-pinned chats and scheduled jobs, NOT for MCP proxies. See [`references/mcp-runless.md`](./references/mcp-runless.md). |
 | Used `wrapAgent` for a websocket-pinned chat or scheduled job | Single-callback block can't bridge requests/workers | Switch to `startRun` + `joinRun` + `endRun` (SDK 2.2.0+). See [`references/long-session.md`](./references/long-session.md). |
+| Anthropic / OpenAI LLM spans missing on raw provider SDKs (`anthropic.messages.create`, `openai.chat.completions.create`) — the run lands but child LLM spans never appear, even though OTel itself produced them | On trodo-node ≤ 2.4.2 / trodo-python ≤ 2.4.0, the OTel→Trodo bridge resolved the active run via `AsyncLocalStorage` (Node) / `contextvars` (Python) at span END. fetch/undici (Node) and httpx (Python) frequently complete in a different async continuation where that context has been clobbered, so the bridge dropped the span. | **Upgrade to `trodo-node >= 2.4.3` / `trodo-python >= 2.4.1`.** The bridge now stamps `trodo.run_id` on the OTel span at span START (while context is alive) and reads it back at span end — so spans survive any async-context loss. If upgrade is blocked, use `registerOTel({ mode: 'otlp' })` (§0b) which bypasses the bridge entirely. Manual `trodo.withSpan(...)` always worked because it executes synchronously inside the live ALS scope. |
+| Ingest returns generic `500 Internal server error` on `/api/sdk/runs/ingest` whenever spans include OTel-bridged LLM children — works fine for runs without spans | Older trodo-node releases emit fractional `duration_ms` (e.g. `2649.1855`) from HrTime deltas. The backend's `agent_spans.duration_ms` is an integer column and Postgres rejects the row, bubbling up as a catch-all 500. | **Upgrade to `trodo-node >= 2.4.3`** (rounds client-side) — the backend ALSO now rounds defensively and returns a structured `400 invalid_field_format` with `hint` and `column` instead of an opaque 500. If you see a structured 4xx in your debug log mentioning `duration_ms`, that's the same root cause for older SDKs in the wild. |
+| Next.js build fails resolving `@opentelemetry/instrumentation-*` modules even though `register()` is guarded with `NEXT_RUNTIME === 'nodejs'` | `instrumentation.ts` imports `trodo-node` (or `@opentelemetry/sdk-node`) at the top level. Next.js compiles `instrumentation.ts` for BOTH runtimes; the Edge bundler still has to resolve the static import graph even when the guarded function body never executes on Edge. `serverExternalPackages` only fixes Node-bundling, not Edge. | Move `trodo-node` import into a `lib/node-instrumentation.ts` file that's only loaded via `await import()` inside the `NEXT_RUNTIME === 'nodejs'` guard. See §0a "Pitfalls" for the canonical split. |
 | `startRun` called but never `endRun` | Run stuck in `"running"` forever in the dashboard | Pair every `startRun` with a guaranteed close path — a TTL sweeper, an explicit session-end notification, or `try/finally` if the session is bounded by one request lifecycle. |
+| OTel ESM hook registered after first `openai/*` dynamic import — OpenAI calls emit zero spans | `register('@opentelemetry/instrumentation/hook.mjs', ...)` is not the first statement in `register.mjs`. Placing it after `await import('openai/shims/node')` means the shim (and transitively the openai module graph) loads un-patched — IITM has no chance to intercept it. The first OpenAI call either throws or simply emits no span. | Move `register('@opentelemetry/instrumentation/hook.mjs', import.meta.url)` to **line 1** of `register.mjs`, before any `await import('openai/...')`. See §2a lean recipe. |
+| OTel instrumentation package pulls in a different `@opentelemetry/core` generation than `sdk-node` — spans drop or SDK throws at init | `@traceloop/instrumentation-openai@0.14.6` (or similar) transitively depends on `@opentelemetry/core@1.30.x`, while `@opentelemetry/sdk-node@0.52.x` was built against `@opentelemetry/core@1.28.x`. npm/pnpm resolves two copies of the same package; the tracer provider and the instrumentations end up on different instances and spans from the instrumentation never reach the provider. | Pin the entire OTel family to a single generation via `overrides` / `resolutions` (see §2a peer-dep pins above). At minimum pin `@opentelemetry/api`, `@opentelemetry/core`, `@opentelemetry/sdk-trace-base`, and `@opentelemetry/resources` to the same patch-compatible range as your `sdk-node`. |
 
 ## When things go wrong
 
