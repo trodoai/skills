@@ -1,0 +1,34 @@
+{
+  "name": "trodoai/skills",
+  "version": "2.0.0",
+  "description": "Trodo skill swarm — orchestrator + two comprehensive master skills (events, agent tracing). Each master skill loads modules inline for its sub-areas (identify, groups, custom events, sessions for events; vercel-ai, otel, langchain, openai, mcp for tracing). Future heal/developer skills slot in as additional top-level entries following the same 6-phase contract.",
+  "skills": [
+    "trodo-install",
+    "trodo-events",
+    "trodo-tracing"
+  ],
+  "modules": {
+    "trodo-events": [
+      "modules/identify.md",
+      "modules/groups.md",
+      "modules/custom-events.md",
+      "modules/sessions.md"
+    ],
+    "trodo-tracing": [
+      "frameworks/vercel-ai.md",
+      "frameworks/otel.md",
+      "frameworks/openai.md",
+      "frameworks/langchain.md",
+      "frameworks/mcp.md"
+    ]
+  },
+  "bundles": {
+    "all": ["trodo-install", "trodo-events", "trodo-tracing"],
+    "events": ["trodo-install", "trodo-events"],
+    "agents": ["trodo-install", "trodo-tracing"]
+  },
+  "default_bundle": "all",
+  "future_bundles": {
+    "heal": "Reserved for future developer/healing skills (trodo-heal-*). Same 6-phase skill contract; orchestrated by trodo-install in diagnose mode."
+  }
+}
