@@ -2,7 +2,7 @@
 
 Targets `trodo-node` >= 2.1.0.
 
-Docs: `https://docs.trodo.ai/agent-analytics/integrations/vercel-ai-sdk.md`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/frameworks/vercel-ai-sdk.md`.
 
 ---
 

@@ -2,7 +2,7 @@
 
 Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0. Pure-ESM Node fixes shipped in `trodo-node` 2.4.2.
 
-Docs: `https://docs.trodo.ai/agent-analytics/tracing/overview.md`, `https://docs.trodo.ai/agent-analytics/integrations/`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/guide.md`, `https://docs.trodo.ai/observability/features/instrumentation/frameworks/`.
 
 ---
 

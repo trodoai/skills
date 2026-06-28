@@ -78,7 +78,7 @@ Use your available fetch/search tools (WebFetch, mcp_fetch, WebSearch, etc.) in 
 
 **1. Start with the index.** Fetch the published list of pages: `https://docs.trodo.ai/llms.txt`. Use this to discover which page covers the topic; don't guess URLs.
 
-**2. Fetch individual pages as markdown.** Append `.md` to any URL from the index: `https://docs.trodo.ai/events/identify.md`.
+**2. Fetch individual pages as markdown.** Append `.md` to any URL from the index: `https://docs.trodo.ai/product-analytics/features/identity.md`.
 
 **3. Search as a fallback.** `site:docs.trodo.ai <query>` if you can't find it from the index.
 

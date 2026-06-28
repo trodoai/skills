@@ -2,7 +2,7 @@
 
 Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0.
 
-Docs: `https://docs.trodo.ai/agent-analytics/tracing/patterns.md`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/manual-spans.md`.
 
 ---
 

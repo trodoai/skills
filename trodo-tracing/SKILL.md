@@ -98,7 +98,7 @@ Use this to discover which page covers the topic, then fetch that page directly.
 **2. Fetch individual pages as markdown**
 
 Append `.md` to any page URL from the index:
-`https://docs.trodo.ai/agent-analytics/integrations/vercel-ai-sdk.md`
+`https://docs.trodo.ai/observability/features/instrumentation/frameworks/vercel-ai-sdk.md`
 
 Read the relevant page before writing code. The decision tree below tells you which page to look for.
 
@@ -318,7 +318,7 @@ The provider's **LLM call** (`chat.completions.create`, `messages.create`, `gene
 
 No OpenInference. No manual `llm()` wrapping for the LLM call itself when a provider above is in the list.
 
-→ Read: `https://docs.trodo.ai/llms.txt`, find the matching `integrations/<framework>.md`, fetch and read before writing code.
+→ Read: `https://docs.trodo.ai/llms.txt`, find the matching `observability/features/instrumentation/frameworks/<framework>.md`, fetch and read before writing code.
 
 → If **Vercel AI SDK** detected: also read [`references/vercel-ai-sdk.md`](./references/vercel-ai-sdk.md) — `experimental_telemetry: { isEnabled: true }` is still required on every call.
 
@@ -487,7 +487,7 @@ const result = await trodo.withSpan(
 );
 ```
 
-→ Read: [`references/manual-instrumentation.md`](./references/manual-instrumentation.md) and `https://docs.trodo.ai/agent-analytics/tracing/patterns.md`.
+→ Read: [`references/manual-instrumentation.md`](./references/manual-instrumentation.md) and `https://docs.trodo.ai/observability/features/instrumentation/manual-spans.md`.
 
 ### 4. Cross-service or sub-agent?
 
@@ -547,7 +547,7 @@ These genuinely have a beginning, middle, and end with one logical run. `wrapAge
 
 Requires `trodo-node >= 2.2.0` / `trodo-python >= 2.2.0`. If the user is on an older SDK, recommend upgrading before suggesting this pattern.
 
-→ Read: [`references/long-session.md`](./references/long-session.md) and `https://docs.trodo.ai/agent-analytics/tracing/start-run-end-run.md`.
+→ Read: [`references/long-session.md`](./references/long-session.md) and `https://docs.trodo.ai/observability/features/instrumentation/long-running-runs.md`.
 
 When NOT to reach for this: if the entire run can be expressed inside one async function, prefer `wrapAgent` — simpler and one HTTP call to the backend.
 
@@ -679,7 +679,7 @@ If the user's pattern matches one of these, start there before writing from scra
 | `https://docs.trodo.ai/recipes/sub-agents.md` | Parent agent spawning linked child runs |
 | `https://docs.trodo.ai/recipes/from-scratch.md` | Raw HTTP to a custom LLM endpoint |
 | `https://docs.trodo.ai/recipes/dual-export.md` | Existing OTel + Trodo side-by-side |
-| `https://docs.trodo.ai/recipes/mcp-server.md` | **MCP server (runless spans)** — one span per `tools/call`, no parent run |
+| `https://docs.trodo.ai/observability/features/mcp.md` | **MCP server (runless spans)** — one span per `tools/call`, no parent run |
 
 ## Minimal install — what the generated code should look like
 
@@ -815,7 +815,7 @@ Before suggesting code changes, check in this order:
    - Does the wrapped function resolve in all code paths (success and error)?
    - For streaming: is the stream actually consumed?
 
-→ Full troubleshooting: `https://docs.trodo.ai/agent-analytics/tracing/troubleshooting.md`.
+→ Full troubleshooting: `https://docs.trodo.ai/observability/faq.md`.
 
 **If the user has the Trodo MCP connected**, query recent runs directly to confirm whether spans are arriving before suggesting any code changes. That's faster than adding debug logs.
 
