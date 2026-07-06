@@ -1,8 +1,8 @@
 ---
 name: trodo-tracing-otel
 version: 2.0.0
-sdk_version_node_register_otel: ">=2.4.0"
-sdk_version_python: ">=2.1.0"
+sdk_version_node_register_otel: ">=2.9.0"
+sdk_version_python: ">=2.9.0"
 last_updated: 2026-05-16
 description: >-
   Add Trodo agent tracing to a codebase that ALREADY has an OTel pipeline —
@@ -20,7 +20,7 @@ description: >-
 
 Focused recipe for codebases that already speak OTel and just need Trodo as a parallel destination.
 
-Full reference: [`../trodo-tracing/references/dual-export.md`](../trodo-tracing/references/dual-export.md), [`../trodo-tracing/references/cross-service.md`](../trodo-tracing/references/cross-service.md).
+Full reference: [`../references/dual-export.md`](../references/dual-export.md), [`../references/cross-service.md`](../references/cross-service.md).
 
 ## 6-phase loop
 

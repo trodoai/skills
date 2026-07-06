@@ -25,7 +25,7 @@ Single-responsibility skill: pick the right event name, pick the right origin, a
 - Grep for naming variants of the same concept: `user_signed_up`, `userSignedUp`, `signed_up`, `Signed Up`. Drift = the top source of "my funnel doesn't work" issues.
 - Identify the trigger surface for the requested event: UI click? Server handler? Webhook? Cron? Queue consumer?
 
-See [`../trodo-events/references/event-taxonomy.md`](../trodo-events/references/event-taxonomy.md).
+See [`../references/event-taxonomy.md`](../references/event-taxonomy.md).
 
 ### UNDERSTAND
 Classify the event:

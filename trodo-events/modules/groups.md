@@ -31,7 +31,7 @@ Grep for multi-tenant signals:
 | Prisma models: `Team`, `Organization`, `Workspace`, `Tenant` | Schema-level tenant |
 | Multiple of the above coexist | Pick primary; layer the rest with `add_group` |
 
-See [`../trodo-events/references/groups-and-multitenancy.md`](../trodo-events/references/groups-and-multitenancy.md).
+See [`../references/groups-and-multitenancy.md`](../references/groups-and-multitenancy.md).
 
 ### UNDERSTAND
 Determine the tenancy model: single dimension (just `teams`)? Hierarchical (`org` contains `teams`)? Flat-but-multi (`team` AND `workspace` are peers)? This shapes whether you use `set_group` once, `set_group` + `add_group`, or one primary plus secondaries.

@@ -1,9 +1,9 @@
 ---
 name: trodo-events
 version: 2.0.0
-sdk_version_node: ">=2.1.0"
-sdk_version_python: ">=2.1.0"
-sdk_version_browser: ">=1.0.12"
+sdk_version_node: ">=2.9.0"
+sdk_version_python: ">=2.9.0"
+sdk_version_browser: ">=2.2.0"
 last_updated: 2026-05-16
 description: >-
   Comprehensive Trodo events install. Detects frontend framework, backend
@@ -78,7 +78,7 @@ Use your available fetch/search tools (WebFetch, mcp_fetch, WebSearch, etc.) in 
 
 **1. Start with the index.** Fetch the published list of pages: `https://docs.trodo.ai/llms.txt`. Use this to discover which page covers the topic; don't guess URLs.
 
-**2. Fetch individual pages as markdown.** Append `.md` to any URL from the index: `https://docs.trodo.ai/product-analytics/features/identity.md`.
+**2. Fetch individual pages as markdown.** Append `.md` to any URL from the index: `https://docs.trodo.ai/product-analytics/features/identity`.
 
 **3. Search as a fallback.** `site:docs.trodo.ai <query>` if you can't find it from the index.
 

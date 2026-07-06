@@ -1,8 +1,8 @@
 ---
 name: trodo-tracing-openai
 version: 2.0.0
-sdk_version_node: ">=2.1.0"
-sdk_version_python: ">=2.1.0"
+sdk_version_node: ">=2.9.0"
+sdk_version_python: ">=2.9.0"
 last_updated: 2026-05-16
 description: >-
   Add Trodo agent tracing to code using the raw provider SDKs — `openai`,
@@ -20,7 +20,7 @@ description: >-
 
 Focused recipe for code that calls provider SDKs directly without an agent framework owning the call site.
 
-Full reference: [`../trodo-tracing/references/auto-instrumentation.md`](../trodo-tracing/references/auto-instrumentation.md), [`../trodo-tracing/references/manual-instrumentation.md`](../trodo-tracing/references/manual-instrumentation.md).
+Full reference: [`../references/auto-instrumentation.md`](../references/auto-instrumentation.md), [`../references/manual-instrumentation.md`](../references/manual-instrumentation.md).
 
 ## 6-phase loop
 

@@ -1,8 +1,8 @@
 ---
 name: trodo-tracing-langchain
 version: 2.0.0
-sdk_version_node: ">=2.1.0"
-sdk_version_python: ">=2.1.0"
+sdk_version_node: ">=2.9.0"
+sdk_version_python: ">=2.9.0"
 last_updated: 2026-05-16
 description: >-
   Add Trodo agent tracing to LangChain / LlamaIndex / Haystack codebases.
@@ -19,7 +19,7 @@ description: >-
 
 Focused recipe for framework-owned dispatch where both LLM and tool spans auto-instrument.
 
-Full reference: [`../trodo-tracing/references/auto-instrumentation.md`](../trodo-tracing/references/auto-instrumentation.md).
+Full reference: [`../references/auto-instrumentation.md`](../references/auto-instrumentation.md).
 
 ## 6-phase loop
 

@@ -1,8 +1,8 @@
 # Dual export — Integration Notes
 
-Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0.
+Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
 
-Docs: `https://docs.trodo.ai/recipes/dual-export.md`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/opentelemetry`.
 
 ---
 
@@ -82,8 +82,8 @@ If the user would rather have all telemetry egress through their own collector a
 
 Trodo's OTLP endpoint:
 
-- URL: `https://sdkapi.trodo.ai/otlp/v1/traces`
-- Required header: `X-Trodo-Site-Id: <site-id>`
+- URL: `https://sdkapi.trodo.ai/v1/traces` (OTLP/HTTP protobuf; the OTel SDK appends `/v1/traces` to a base of `https://sdkapi.trodo.ai`)
+- Required header: `X-Trodo-Site-Id: <site-id>` (or `Authorization: Bearer <site-id>`)
 
 In the user's collector config (or an OTLP exporter pointed at Trodo), add a second pipeline that forwards everything to Trodo's endpoint with the site-ID header.
 

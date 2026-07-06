@@ -1,14 +1,14 @@
 ---
 name: trodo-tracing
 version: 2.0.0
-sdk_version_node: ">=2.1.0"
-sdk_version_python: ">=2.1.0"
-sdk_version_node_long_session: ">=2.2.0"
-sdk_version_python_long_session: ">=2.2.0"
-sdk_version_node_track_mcp: ">=2.3.0"
-sdk_version_python_track_mcp: ">=2.3.0"
-sdk_version_node_register_otel: ">=2.4.0"
-sdk_version_node_pure_esm: ">=2.4.2"
+sdk_version_node: ">=2.9.0"
+sdk_version_python: ">=2.9.0"
+sdk_version_node_long_session: ">=2.9.0"
+sdk_version_python_long_session: ">=2.9.0"
+sdk_version_node_track_mcp: ">=2.9.0"
+sdk_version_python_track_mcp: ">=2.9.0"
+sdk_version_node_register_otel: ">=2.9.0"
+sdk_version_node_pure_esm: ">=2.9.0"
 last_updated: 2026-05-16
 description: >-
   Integrate Trodo agent analytics tracing into a codebase. Detects the user's
@@ -98,7 +98,7 @@ Use this to discover which page covers the topic, then fetch that page directly.
 **2. Fetch individual pages as markdown**
 
 Append `.md` to any page URL from the index:
-`https://docs.trodo.ai/observability/features/instrumentation/frameworks/vercel-ai-sdk.md`
+`https://docs.trodo.ai/observability/features/instrumentation/frameworks/vercel-ai-sdk`
 
 Read the relevant page before writing code. The decision tree below tells you which page to look for.
 
@@ -267,7 +267,7 @@ The SDK errors with the install hint above if you call `mode: 'otlp'` without th
 
 → **YES:** Don't replace the user's OTel setup. Trodo's SDK registers its own span processor, so it coexists with an existing `NodeTracerProvider` / `TracerProvider` — both exporters receive every span. The one thing to double-check is that `trodo.init()` runs **after** the user's provider is registered, so spans reach both destinations.
 
-→ Read: [`references/dual-export.md`](./references/dual-export.md) and `https://docs.trodo.ai/recipes/dual-export.md`.
+→ Read: [`references/dual-export.md`](./references/dual-export.md) and `https://docs.trodo.ai/observability/features/instrumentation/opentelemetry`.
 
 ### 2. Framework or provider SDK in Trodo's auto-instrumented list?
 
@@ -487,7 +487,7 @@ const result = await trodo.withSpan(
 );
 ```
 
-→ Read: [`references/manual-instrumentation.md`](./references/manual-instrumentation.md) and `https://docs.trodo.ai/observability/features/instrumentation/manual-spans.md`.
+→ Read: [`references/manual-instrumentation.md`](./references/manual-instrumentation.md) and `https://docs.trodo.ai/observability/features/instrumentation/manual-spans`.
 
 ### 4. Cross-service or sub-agent?
 
@@ -497,7 +497,7 @@ The run context propagates inside a single Node/Python process via AsyncLocalSto
 
 → **Worker thread / ProcessPoolExecutor:** capture `runId` from the parent, pass it in, call `joinRun(runId, fn)` / `join_run(run_id, ...)` inside.
 
-→ Read: [`references/cross-service.md`](./references/cross-service.md) and `https://docs.trodo.ai/recipes/cross-service.md`.
+→ Read: [`references/cross-service.md`](./references/cross-service.md) and `https://docs.trodo.ai/observability/features/instrumentation/distributed-tracing`.
 
 ### 5a. Building an MCP server that proxies tool calls?
 
@@ -547,7 +547,7 @@ These genuinely have a beginning, middle, and end with one logical run. `wrapAge
 
 Requires `trodo-node >= 2.2.0` / `trodo-python >= 2.2.0`. If the user is on an older SDK, recommend upgrading before suggesting this pattern.
 
-→ Read: [`references/long-session.md`](./references/long-session.md) and `https://docs.trodo.ai/observability/features/instrumentation/long-running-runs.md`.
+→ Read: [`references/long-session.md`](./references/long-session.md) and `https://docs.trodo.ai/observability/features/instrumentation/long-running-runs`.
 
 When NOT to reach for this: if the entire run can be expressed inside one async function, prefer `wrapAgent` — simpler and one HTTP call to the backend.
 
@@ -664,22 +664,20 @@ This applies equally to span output. If `data` is large but bounded by row count
 
 If you find yourself wanting to put something in both `setOutput` and `setAttribute`, use both — the attribute makes it filterable, the output keeps the full context.
 
-## Recipes
+## Reference patterns
 
-If the user's pattern matches one of these, start there before writing from scratch:
+If the user's pattern matches one of these, read the matching docs page before writing from scratch:
 
-| Recipe | Pattern |
+| Pattern | Docs |
 |---|---|
-| `https://docs.trodo.ai/recipes/basic-agent.md` | Basic agent (OpenAI, Anthropic, LangChain, etc.) |
-| `https://docs.trodo.ai/recipes/streaming-agent.md` | Streaming with SSE / async iterator |
-| `https://docs.trodo.ai/recipes/tool-calling-agent.md` | Agent with tool calls |
-| `https://docs.trodo.ai/recipes/multi-step-agent.md` | Multi-step / staged agent |
-| `https://docs.trodo.ai/recipes/context-manager.md` | Multi-file split, context propagation |
-| `https://docs.trodo.ai/recipes/cross-service.md` | Node ↔ Node or Node ↔ Python over HTTP |
-| `https://docs.trodo.ai/recipes/sub-agents.md` | Parent agent spawning linked child runs |
-| `https://docs.trodo.ai/recipes/from-scratch.md` | Raw HTTP to a custom LLM endpoint |
-| `https://docs.trodo.ai/recipes/dual-export.md` | Existing OTel + Trodo side-by-side |
-| `https://docs.trodo.ai/observability/features/mcp.md` | **MCP server (runless spans)** — one span per `tools/call`, no parent run |
+| Wrap an agent (OpenAI, Anthropic, LangChain, etc.) | `https://docs.trodo.ai/observability/features/instrumentation/wrap-your-agent` |
+| Manual spans — tool calls, multi-step / staged agents, context propagation | `https://docs.trodo.ai/observability/features/instrumentation/manual-spans` |
+| Framework specifics (OpenAI / Anthropic / Vercel AI / LangChain / …) | `https://docs.trodo.ai/observability/features/instrumentation/frameworks/overview` |
+| Streaming / long-running runs (SSE, async iterator, resumed sessions) | `https://docs.trodo.ai/observability/features/instrumentation/long-running-runs` |
+| Cross-service & sub-agents (Node ↔ Node / Node ↔ Python over HTTP) | `https://docs.trodo.ai/observability/features/instrumentation/distributed-tracing` |
+| Raw HTTP to a custom LLM endpoint | `https://docs.trodo.ai/observability/features/instrumentation/raw-http` |
+| Existing OTel + Trodo side-by-side | `https://docs.trodo.ai/observability/features/instrumentation/opentelemetry` |
+| MCP server (runless spans) — one span per `tools/call`, no parent run | `https://docs.trodo.ai/observability/features/mcp` |
 
 ## Minimal install — what the generated code should look like
 
@@ -815,7 +813,7 @@ Before suggesting code changes, check in this order:
    - Does the wrapped function resolve in all code paths (success and error)?
    - For streaming: is the stream actually consumed?
 
-→ Full troubleshooting: `https://docs.trodo.ai/observability/faq.md`.
+→ Full troubleshooting: `https://docs.trodo.ai/observability/faq`.
 
 **If the user has the Trodo MCP connected**, query recent runs directly to confirm whether spans are arriving before suggesting any code changes. That's faster than adding debug logs.
 

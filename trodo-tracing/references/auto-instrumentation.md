@@ -1,8 +1,8 @@
 # Auto-instrumentation — Integration Notes
 
-Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0. Pure-ESM Node fixes shipped in `trodo-node` 2.4.2.
+Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0. (Pure-ESM Node support and the peer-dep feature-detection noted below are all included in current versions.)
 
-Docs: `https://docs.trodo.ai/observability/features/instrumentation/guide.md`, `https://docs.trodo.ai/observability/features/instrumentation/frameworks/`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/guide`, `https://docs.trodo.ai/observability/features/instrumentation/frameworks/overview`.
 
 ---
 

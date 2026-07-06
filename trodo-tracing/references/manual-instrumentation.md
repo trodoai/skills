@@ -1,8 +1,8 @@
 # Manual Instrumentation — Integration Notes
 
-Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0.
+Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
 
-Docs: `https://docs.trodo.ai/observability/features/instrumentation/manual-spans.md`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/manual-spans`.
 
 ---
 
@@ -104,15 +104,29 @@ From the source: `wrapAgent` opens a fresh run context. Calling `wrapAgent` insi
 
 ## Error handling is automatic
 
-All four helpers record exceptions on the span and set `status = 'error'` before re-throwing. You do not need try/catch purely to mark the span as failed.
+A thrown exception inside `wrapAgent` / `withSpan` / `span` / `joinRun` sets `status = 'error'` on the failing span (and the run) and is re-thrown — you do not need try/catch purely to mark the span as failed.
+
+On **`trodo-node` / `trodo-python` ≥ 2.9.0** the capture is rich and fully automatic — no manual call:
+
+| Field | Captured from the thrown error |
+|---|---|
+| `error_type` | exception class (e.g. `RateLimitError`, `TypeError`) |
+| `error_message` | the message |
+| `status_code` | `err.status` / `err.statusCode` / `err.response.status_code` / `err.code` — covers OpenAI, Anthropic, httpx/fetch/axios, stdlib |
+| `stack_trace` | the stack / traceback |
+| `level` | `error` (severity; Langfuse-style `debug`/`default`/`warning`/`error`) |
+
+On `< 2.9.0` only `error_type` + `error_message` are recorded. (Auto-instrumented provider spans read the same fields from OTel `exception` events regardless.)
 
 ```ts
 // No try/catch needed just for Trodo
 const order = await lookup(orderId);
-// If lookup throws, the span ends with status='error' and error details; re-thrown to your code.
+// If lookup throws, the span ends status='error' with type/message/status_code/stack.
 ```
 
-You still need try/catch if you want to handle the error in your own code.
+You still need try/catch if you want to handle the error in your own code. To record an error **without** re-throwing (you caught it to recover), use `span.setError({ message, type?, statusCode? })` (Node) / `span.set_error(message, type=, status_code=)` (Python) — a `SpanHandle` method added in 2.9.0. Run-level: `run.setErrorSummary(summary)` / `run.set_error_summary(summary)`.
+
+Full reference: [`https://docs.trodo.ai/observability/features/status-and-errors`](https://docs.trodo.ai/observability/features/status-and-errors).
 
 ---
 

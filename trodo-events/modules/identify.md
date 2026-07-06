@@ -32,7 +32,7 @@ Grep auth/session code. Cheat sheet:
 | `firebase/auth` | Firebase → identifier `user.uid` |
 | JWT middleware, `req.user`, custom session | Custom → grep the JWT claim used elsewhere |
 
-See [`../trodo-events/references/identify-and-auth.md`](../trodo-events/references/identify-and-auth.md) for per-provider hooks.
+See [`../references/identify-and-auth.md`](../references/identify-and-auth.md) for per-provider hooks.
 
 ### UNDERSTAND
 Decide: is there ONE obvious identifier the app already keys users by, or several candidates? Read DB models, ORM types, and where the user object is read at server boundaries. The right `distinctId` is whatever the app's own user table is keyed by.
@@ -40,7 +40,7 @@ Decide: is there ONE obvious identifier the app already keys users by, or severa
 ### ANALYZE
 - **Browser only** → `Trodo.identify(<id>)` in the auth callback, `Trodo.reset()` on logout.
 - **Server only** → `trodo.forUser(<id>).identify(<id>)` in the login handler / request middleware.
-- **Both** → same id on both ends, propagated via JWT claim, server-set cookie, or `X-Trodo-Distinct-Id` header. See [`../trodo-events/references/cross-boundary-identity.md`](../trodo-events/references/cross-boundary-identity.md).
+- **Both** → same id on both ends, propagated via JWT claim, server-set cookie, or `X-Trodo-Distinct-Id` header. See [`../references/cross-boundary-identity.md`](../references/cross-boundary-identity.md).
 
 ### PLAN
 Output, file-level:

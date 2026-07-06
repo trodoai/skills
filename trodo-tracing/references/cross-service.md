@@ -1,8 +1,8 @@
 # Cross-service — Integration Notes
 
-Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0.
+Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
 
-Docs: `https://docs.trodo.ai/recipes/cross-service.md`, `https://docs.trodo.ai/observability/features/instrumentation/distributed-tracing.md`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/distributed-tracing`.
 
 ---
 
@@ -233,7 +233,27 @@ Each tool call gets its own named child span under the caller's `orchestrator` s
 
 Context managers mark the span "ok" on clean exit and "failed" only if an exception propagates through the `with` block. If your code catches exceptions internally and returns error objects (common in resilient orchestrators), spans always appear "ok" even when tools fail.
 
-Fix: re-raise a sentinel exception inside the `with` block when the result indicates failure, then catch it immediately outside to preserve the return value.
+**On `trodo-node` / `trodo-python` ≥ 2.9.0, do this directly** — `SpanHandle.set_error` / `setError` marks the span failed without any exception gymnastics:
+
+```python
+with _trodo.join_run(run_id, parent_id, name=name, kind="tool") as span:
+    result = await execute_tool(name, params)   # returns an error dict, never raises
+    span.set_output(result)
+    if result.get("status") in ("error", "timeout"):
+        span.set_error(result.get("message", "tool failed"), type=result.get("status"))
+    return result
+```
+
+```ts
+await withSpan('my-tool', async (span) => {
+  const result = await runTool();               // returns { status, message }, never throws
+  span.setOutput(result);
+  if (result.status === 'error') span.setError({ message: result.message, type: 'ToolError' });
+  return result;
+});
+```
+
+**On `< 2.9.0`** (no `set_error`), fall back to re-raising a sentinel exception inside the `with` block when the result indicates failure, then catch it immediately outside to preserve the return value.
 
 ```python
 class _SpanFailed(Exception):

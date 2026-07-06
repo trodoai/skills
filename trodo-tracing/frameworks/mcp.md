@@ -1,8 +1,8 @@
 ---
 name: trodo-tracing-mcp
 version: 2.0.0
-sdk_version_node_track_mcp: ">=2.3.0"
-sdk_version_python_track_mcp: ">=2.3.0"
+sdk_version_node_track_mcp: ">=2.9.0"
+sdk_version_python_track_mcp: ">=2.9.0"
 last_updated: 2026-05-16
 description: >-
   Add Trodo agent tracing to an MCP server (`@modelcontextprotocol/sdk` or
@@ -18,7 +18,7 @@ description: >-
 
 Focused recipe for MCP servers. MCP has no conversational run boundary — each `tools/call` is its own thing.
 
-Full reference: [`../trodo-tracing/references/mcp-runless.md`](../trodo-tracing/references/mcp-runless.md).
+Full reference: [`../references/mcp-runless.md`](../references/mcp-runless.md).
 
 ## 6-phase loop
 

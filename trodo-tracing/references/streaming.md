@@ -1,8 +1,8 @@
 # Streaming — Integration Notes
 
-Targets `trodo-node` >= 2.1.0 and `trodo-python` >= 2.1.0.
+Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
 
-Docs: `https://docs.trodo.ai/recipes/streaming-agent.md`.
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/long-running-runs`.
 
 ---
 

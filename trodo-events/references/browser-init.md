@@ -191,10 +191,14 @@ export default defineNuxtConfig({
 ## Plain HTML (no bundler)
 
 ```html
-<!-- In <head>, before any code that calls Trodo.* -->
-<script src="https://cdn.trodo.ai/trodo.min.js"></script>
+<!-- In <head>, as early as possible. The script auto-initialises from the
+     site-id / auto-events attributes; window.Trodo is available afterwards. -->
 <script>
-  Trodo.init({ siteId: 'YOUR_SITE_ID', autoEvents: true });
+  var script = document.createElement('script');
+  script.src = 'https://cdn.trodo.ai/scripts/analytics/trodo.script.min.js';
+  script.setAttribute('site-id', 'YOUR_SITE_ID');
+  script.setAttribute('auto-events', 'true');
+  document.head.appendChild(script);
 </script>
 ```
 

@@ -1,8 +1,8 @@
 ---
 name: trodo-tracing-vercel-ai
 version: 2.0.0
-sdk_version_node: ">=2.1.0"
-sdk_version_node_register_otel: ">=2.4.0"
+sdk_version_node: ">=2.9.0"
+sdk_version_node_register_otel: ">=2.9.0"
 last_updated: 2026-05-16
 description: >-
   Add Trodo agent tracing to a Next.js / Vercel AI SDK app — the `@vercel/otel`
@@ -19,7 +19,7 @@ description: >-
 
 # Trodo Tracing — Vercel AI SDK / @vercel/otel
 
-Focused recipe for the Vercel AI SDK + Next.js path. Full reference: [`../trodo-tracing/references/vercel-ai-sdk.md`](../trodo-tracing/references/vercel-ai-sdk.md).
+Focused recipe for the Vercel AI SDK + Next.js path. Full reference: [`../references/vercel-ai-sdk.md`](../references/vercel-ai-sdk.md).
 
 ## 6-phase loop
 
