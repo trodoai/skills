@@ -32,7 +32,7 @@ description: >-
   the call site (LangChain Tool, Vercel AI SDK tools, OpenAI Agents SDK,
   LlamaIndex query engine, Haystack pipeline). For raw OpenAI / Anthropic /
   Gemini / Bedrock function calling, wrap the local tool execution with
-  trodo.tool() or trodo.withSpan({ kind: 'tool' }) — see §2 table.**
+  trodo.tool() or trodo.withSpan(name, fn, { kind: 'tool' }) — see §2 table.**
   Specifically
   enforces three output-capture rules: (1) await the full result before
   setOutput so streamed replies aren't truncated, (2) put the FULL structured
@@ -559,7 +559,7 @@ The skill uses several callbacks; each yields a different handle with a differen
 |---|---|---|
 | `wrapAgent(name, async (run) => …)` | `RunHandle` | `setInput(obj)`, `setOutput(obj)`, `setMetadata(obj)` — **no `setAttribute`** |
 | `startRun(name, …)` → `joinRun(runId, async (run) => …)` | `RunHandle` | same as above |
-| `withSpan({ kind, name }, async (span) => …)` | `SpanHandle` | `setInput`, `setOutput`, `setAttribute(key, value)`, `setLlm({...})`, `setTool(name)` |
+| `withSpan(name, async (span) => …, { kind })` | `SpanHandle` | `setInput`, `setOutput`, `setAttribute(key, value)`, `setLlm({...})`, `setTool(name)` |
 | `tool(name, fn)` / `llm(...)` / `retrieval(...)` / `trace(...)` | factory — calling the inner fn yields no handle; span is built from arguments + return value | n/a |
 
 If you want a scalar attribute on the **run** (counts, flags, version tags), use `run.setMetadata({ key: value })` — set many at once. If you want a scalar attribute on a **span**, use `span.setAttribute(key, value)` from inside `withSpan`. Calling `run.setAttribute(...)` will throw `TypeError: run.setAttribute is not a function` at runtime — `RunHandle` does not implement it.
@@ -663,6 +663,8 @@ This applies equally to span output. If `data` is large but bounded by row count
 | `setMetadata(**kwargs)` (run-level only) | Run-wide custom properties: `customer_tier`, `environment`, `feature_flag_X`, version tags |
 
 If you find yourself wanting to put something in both `setOutput` and `setAttribute`, use both — the attribute makes it filterable, the output keeps the full context.
+
+**For LLM-kind spans, structure the input where it's meaningful:** `setInput({ system_instruction, context, query })` instead of one blob. Trodo embeds the input as a whole **and** each field separately, which powers LLM-node analysis and the context-loss / hallucination detectors. Do it for RAG / tool-augmented / multi-part prompts; for a single plain prompt just pass the string. See [`references/manual-instrumentation.md`](./references/manual-instrumentation.md).
 
 ## Reference patterns
 

@@ -10,7 +10,7 @@ description: >-
   `@aws-sdk/client-bedrock-runtime`, `cohere-ai`, `@mistralai/mistralai`.
   LLM calls auto-instrument once `trodo.init()` runs. Tool calls do NOT
   auto-instrument when using raw provider SDKs — wrap local tool execution
-  with `trodo.tool()` or `trodo.withSpan({ kind: 'tool' })`. Wrap the outermost
+  with `trodo.tool()` or `trodo.withSpan(name, fn, { kind: 'tool' })`. Wrap the outermost
   agent function with `wrapAgent` / `wrap_agent` so child LLM/tool spans
   attach to a run. Use when none of: Vercel AI SDK, OpenAI Agents SDK,
   LangChain, LlamaIndex, Haystack, MCP server.
@@ -36,7 +36,7 @@ Full reference: [`../references/auto-instrumentation.md`](../references/auto-ins
 
 ### ANALYZE
 - Wrap the **outermost agent function** with `trodo.wrapAgent('<agent_name>', fn, { distinctId })`. This creates the run that all child spans attach to.
-- Wrap each **local tool execution** with `trodo.tool('<tool_name>', async () => { ... })` or `trodo.withSpan({ kind: 'tool', name: '<tool_name>' }, ...)`.
+- Wrap each **local tool execution** with `trodo.tool('<tool_name>', async () => { ... })` or `trodo.withSpan('<tool_name>', async (span) => { ... }, { kind: 'tool' })`.
 - LLM calls inside the wrapped agent auto-attach as child spans — do NOT add manual `trodo.llm()` wrappers.
 
 ### PLAN

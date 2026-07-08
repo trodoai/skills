@@ -124,10 +124,11 @@ import { workerData } from 'worker_threads';
 trodo.init({ siteId: process.env.TRODO_SITE_ID! });
 
 await joinRun(workerData.runId, async () => {
-  await withSpan({ kind: 'tool', name: 'heavy-work' }, async (span) => {
+  await withSpan('heavy-work', async (span) => {
+    span.setTool('heavy-work');
     span.setInput(workerData.doc);
     // ...
-  });
+  }, { kind: 'tool' });
 });
 ```
 

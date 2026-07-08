@@ -75,6 +75,33 @@ Python wrappers preserve the full signature — no object-wrapping needed.
 
 ---
 
+## Structure LLM-node input: `{ query, context, system_instruction }`
+
+When you set the input of an **LLM-kind span** yourself (`setInput` / `set_input`, the `llm` helper, or `trackLlmCall`), prefer a structured object over one blob **where the parts are meaningful** — RAG, tool-augmented, or multi-part prompts:
+
+```ts
+span.setInput({
+  system_instruction: systemPrompt,   // system / developer prompt
+  context: retrievedDocs,             // RAG context, tool results, history
+  query: userQuestion,                // the actual user turn
+});
+```
+```python
+span.set_input({
+    "system_instruction": system_prompt,
+    "context": retrieved_docs,
+    "query": user_question,
+})
+```
+
+Trodo embeds the input **as a whole and each field separately** (`input`, `query`, `context`, `system_instruction`), which powers LLM-node analysis and the context-loss / hallucination detectors. Each field takes a string or a message array (`[{ role, content }, …]`).
+
+**Do this when you can, don't force it.** If the input is a single prompt with no separable parts, pass the plain string — it's embedded as one vector and nothing is lost. Only split when `query` / `context` / `system_instruction` genuinely exist. Auto-instrumented provider spans (OpenAI/Anthropic/…) already carry the provider's message array — this guidance is for spans whose input **you** set.
+
+Docs: `https://docs.trodo.ai/observability/features/instrumentation/manual-spans`.
+
+---
+
 ## Nesting is automatic — don't pass `runId`
 
 Helpers nest under the currently active run via AsyncLocalStorage (Node) / contextvars (Python). When called from inside `wrapAgent`, they become children of the run automatically. Don't pass `runId` / `run` / `ctx` down — the helpers read it from context.
@@ -200,14 +227,14 @@ Whatever string you pass becomes the span name verbatim — no automatic prefix.
 For attributes the typed helpers don't expose, or when you need explicit control over span lifecycle:
 
 ```ts
-await trodo.withSpan({ kind: 'llm', name: 'chat.completions' }, async (span) => {
+await trodo.withSpan('chat.completions', async (span) => {
   span.setLlm({ model: 'gpt-4o-mini', provider: 'openai', inputTokens: 120, outputTokens: 64 });
   span.setInput({ prompt: '...' });
   span.setAttribute('trodo.customer_tier', 'enterprise');
   const result = await openai.chat.completions.create({ ... });
   span.setOutput(result);
   return result;
-});
+}, { kind: 'llm' });
 ```
 
 `withSpan` ends the span automatically when the callback returns or throws. Prefer it over raw OTel `tracer.startActiveSpan` — the latter requires manual `span.end()` in all code paths, which is easy to forget in error branches.

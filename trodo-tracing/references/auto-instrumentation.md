@@ -22,7 +22,7 @@ Default is **on**. Opt out with `autoInstrument: false` (Node) or `auto_instrume
 
 | Package | LLM call | Tool calls | Notes |
 |---|---|---|---|
-| `openai` (raw) | yes | **manual** | Returns `tool_calls[]`; your code runs the tool. Wrap with `trodo.tool` / `trodo.withSpan({ kind: 'tool' })`. |
+| `openai` (raw) | yes | **manual** | Returns `tool_calls[]`; your code runs the tool. Wrap with `trodo.tool` / `trodo.withSpan(name, fn, { kind: 'tool' })`. |
 | `@anthropic-ai/sdk` (raw) | yes | **manual** | Returns `tool_use` blocks; same pattern as raw OpenAI. |
 | `langchain` | yes | **auto** | LangChain `Tool` abstraction is patched. |
 | `@aws-sdk/client-bedrock-runtime` | yes | **manual** when used in function-calling mode | Per-model-family token extraction. |
