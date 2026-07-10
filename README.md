@@ -2,7 +2,7 @@
 
 One repo. Agent Skills that teach AI coding assistants (Claude Code, Cursor, Windsurf, etc.) how to install [Trodo](https://trodo.ai) into any codebase — events, identity, groups, sessions, custom events, agent tracing — and, over time, how to *fix* Trodo integration issues like a developer would.
 
-Consolidates and replaces the old two-repo split (`trodoai/skills` agent + `trodoai/skills-setup` events). One install command, two comprehensive master skills, one orchestrator.
+Consolidates and replaces the old two-repo split (`trodoai/skills` agent + `trodoai/skills-setup` events). One install command, two install master skills (events, agent tracing), a tracing audit/heal master, and one orchestrator.
 
 ## Install
 
@@ -28,9 +28,13 @@ Per-skill install also works (`npx skills add trodoai/skills --skill trodo-event
 "trace my Vercel AI SDK app"                          → trodo-tracing (vercel-ai framework)
 "trace my MCP server"                                 → trodo-tracing (mcp framework)
 "why are my server events showing as server_global"   → trodo-events (identify module)
+"audit my trodo tracing, find the gaps"               → trodo-heal-tracing
+"my runs show error but no error message"             → trodo-heal-tracing
+"a step failed but the span shows ok"                 → trodo-heal-tracing
+"my LLM calls aren't showing as child spans"          → trodo-heal-tracing
 ```
 
-`/trodo-install`, `/trodo-events`, `/trodo-tracing` work as direct slash invocations too.
+`/trodo-install`, `/trodo-events`, `/trodo-tracing`, `/trodo-heal-tracing` work as direct slash invocations too.
 
 ## Architecture
 
@@ -81,20 +85,34 @@ Reference content under [`trodo-events/references/`](./trodo-events/references) 
 
 Reference content under [`trodo-tracing/references/`](./trodo-tracing/references) is preserved (auto-instrumentation, manual-instrumentation, streaming, long-session, mcp-runless, dual-export, cross-service, vercel-ai-sdk, skill-feedback).
 
-### Future: heal / developer skills
+### `trodo-heal-tracing` (tracing audit / heal master)
 
-The same 6-phase contract applies to non-installation work. Planned top-level skills:
+[`trodo-heal-tracing/SKILL.md`](./trodo-heal-tracing/SKILL.md) — audits an **existing** tracing integration instead of installing a new one. It inventories what's already instrumented, traces the real execution flow, and reports the gaps that make the dashboard lie against six health invariants:
 
-- `trodo-heal-missing-spans`
-- `trodo-heal-server-global-events`
+| Invariant | Example gap it catches |
+|---|---|
+| Every entry point instrumented | A request handler that runs an agent with no `wrapAgent` — the whole run is invisible |
+| Every real step shows up | Raw-provider tool dispatch or a retrieval step with no span |
+| Failures read as failures | Swallowed exception → span shows green **ok**; or **error with no message** (provider error re-thrown as a bare object) |
+| Outputs are complete | Unconsumed stream / summary-instead-of-payload / hand-sliced output |
+| Runs are attributed | Missing or inconsistent `distinctId` → anonymous / fragmented users |
+| Run shape matches the runtime | `wrapAgent` on an MCP server, `startRun` never closed, accidental nested runs, double-tracking |
+
+Founding premise: **Trodo's ingest already captures every error field the client emits** (the OTel `exception` event's type/message/stacktrace, span `status.message`, `error.type`, provider status codes, level) — so "error with no message" is a client-side *recording* gap, not an ingest gap, and this skill fixes it at the source. It never edits code before showing a gap report and getting approval, and never adds spans for steps that don't exist.
+
+### Future: further heal / developer skills
+
+The same 6-phase contract applies to the rest of the diagnose surface. Planned next:
+
+- `trodo-heal-server-global-events` (events under `server_global`)
 - `trodo-heal-double-tracking`
 - `trodo-heal-init-loop`
 
-Each will diagnose a symptom in real code, identify the broken invariant, propose a diff, confirm, apply. The orchestrator gains a diagnose-mode entrypoint (*"something is wrong with my Trodo setup, fix it"*) and routes to the right heal skill.
+Each diagnoses a symptom in real code, identifies the broken invariant, proposes a diff, confirms, applies. The orchestrator (`trodo-install`) routes diagnose-mode requests (*"something is wrong with my Trodo setup, fix it"*) to the right heal skill.
 
 ## Manifest
 
-[`manifest.json`](./manifest.json) lists every skill, the modules inside each master, and the bundles: `all` (default), `events`, `agents`, plus a reserved `heal` slot.
+[`manifest.json`](./manifest.json) lists every skill, the modules inside each master, and the bundles: `all` (default), `events`, `agents`, and `heal`.
 
 ## Versioning
 

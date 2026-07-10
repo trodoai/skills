@@ -27,8 +27,8 @@ Default is **on**. Opt out with `autoInstrument: false` (Node) or `auto_instrume
 | `langchain` | yes | **auto** | LangChain `Tool` abstraction is patched. |
 | `@aws-sdk/client-bedrock-runtime` | yes | **manual** when used in function-calling mode | Per-model-family token extraction. |
 | `cohere-ai` | yes | **manual** | `chat`, `chatStream`, `generate`. |
-| `@google/generative-ai` | yes | **manual** when used with function calling | `generateContent`, streaming. |
-| `@google-cloud/vertexai` | yes | **manual** when used with function calling | Same as `@google/generative-ai`. |
+| `@google/genai` (**v1.x only**) | yes | **manual** when used with function calling | `generateContent`, streaming. The instrumentor (`@traceloop/instrumentation-google-generativeai`) patches `@google/genai >=1 <2` — on `@google/genai@2.x` it silently skips (calls succeed, no spans). Pin `@google/genai@^1`. The legacy `@google/generative-ai` package is NOT patched. |
+| `@google-cloud/vertexai` | yes | **manual** when used with function calling | Same as `@google/genai`. |
 | `llamaindex` | yes | **auto** for query-engine tool calls | Retriever calls also auto. |
 | `ai` (Vercel AI SDK) | yes | **auto** for `tools: {...}` | **Requires** `experimental_telemetry: { isEnabled: true }` on every call — see [`vercel-ai-sdk.md`](./vercel-ai-sdk.md). |
 | `@openai/agents` | yes | **auto** | Framework owns tool execution. |
@@ -42,7 +42,7 @@ Default is **on**. Opt out with `autoInstrument: false` (Node) or `auto_instrume
 | `anthropic` (raw) | yes | **manual** | `messages.create` returns `tool_use` blocks. |
 | `langchain` / `langchain-core` | yes | **auto** | Chains, LLM invocations, tool calls all patched. |
 | `llama_index` | yes | **auto** for query-engine + retriever |
-| `google.generativeai` | yes | **manual** when using function calling |
+| `google-genai` (`from google import genai`, NEW SDK) | yes | **manual** when using function calling | Current `opentelemetry-instrumentation-google-generativeai` imports `google.genai` and patches ONLY the new SDK — the deprecated `google.generativeai` package is no longer instrumented (its import fails silently → zero spans). |
 | `vertexai` | yes | **manual** when using function calling |
 | `boto3` (Bedrock) | yes | **manual** when using function calling | `invoke_model`, `invoke_model_with_response_stream`. |
 | `cohere` | yes | **manual** | Chat, generate. |

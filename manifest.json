@@ -1,11 +1,12 @@
 {
   "name": "trodoai/skills",
-  "version": "2.0.0",
-  "description": "Trodo skill swarm — orchestrator + two comprehensive master skills (events, agent tracing). Each master skill loads modules inline for its sub-areas (identify, groups, custom events, sessions for events; vercel-ai, otel, langchain, openai, mcp for tracing). Future heal/developer skills slot in as additional top-level entries following the same 6-phase contract.",
+  "version": "2.1.0",
+  "description": "Trodo skill swarm — orchestrator + install masters (events, agent tracing) + a tracing heal/audit master. Each master loads modules inline for its sub-areas (identify, groups, custom events, sessions for events; vercel-ai, otel, langchain, openai, mcp for tracing). trodo-heal-tracing audits an existing tracing integration, finds the gaps that make the dashboard lie (false 'ok' on failures, error-with-no-message, missing spans, empty output, anon users, wrong run shape), proposes a fix per gap, and applies on approval. Further heal/developer skills slot in as additional top-level entries following the same 6-phase contract.",
   "skills": [
     "trodo-install",
     "trodo-events",
-    "trodo-tracing"
+    "trodo-tracing",
+    "trodo-heal-tracing"
   ],
   "modules": {
     "trodo-events": [
@@ -23,12 +24,13 @@
     ]
   },
   "bundles": {
-    "all": ["trodo-install", "trodo-events", "trodo-tracing"],
+    "all": ["trodo-install", "trodo-events", "trodo-tracing", "trodo-heal-tracing"],
     "events": ["trodo-install", "trodo-events"],
-    "agents": ["trodo-install", "trodo-tracing"]
+    "agents": ["trodo-install", "trodo-tracing"],
+    "heal": ["trodo-install", "trodo-tracing", "trodo-heal-tracing"]
   },
   "default_bundle": "all",
   "future_bundles": {
-    "heal": "Reserved for future developer/healing skills (trodo-heal-*). Same 6-phase skill contract; orchestrated by trodo-install in diagnose mode."
+    "heal": "Reserved for further developer/healing skills (trodo-heal-*). Same 6-phase skill contract; orchestrated by trodo-install in diagnose mode. trodo-heal-tracing (the tracing audit/heal master) has shipped; trodo-heal-server-global-events and others slot in here next."
   }
 }

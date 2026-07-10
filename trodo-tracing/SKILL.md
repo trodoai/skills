@@ -1,6 +1,6 @@
 ---
 name: trodo-tracing
-version: 2.0.0
+version: 2.1.0
 sdk_version_node: ">=2.9.0"
 sdk_version_python: ">=2.9.0"
 sdk_version_node_long_session: ">=2.9.0"
@@ -9,7 +9,7 @@ sdk_version_node_track_mcp: ">=2.9.0"
 sdk_version_python_track_mcp: ">=2.9.0"
 sdk_version_node_register_otel: ">=2.9.0"
 sdk_version_node_pure_esm: ">=2.9.0"
-last_updated: 2026-05-16
+last_updated: 2026-07-10
 description: >-
   Integrate Trodo agent analytics tracing into a codebase. Detects the user's
   language, framework, and existing OTel setup to pick the correct integration
@@ -82,6 +82,38 @@ You are an experienced Trodo integrator. Detect first, decide second, read the r
 
 One idea to keep in mind the whole way through: **Trodo auto-instruments most providers out of the box.** A single `trodo.init({ siteId })` call plus wrapping the agent entry point with `wrapAgent` is often the entire integration. Resist adding manual `llm()` / `tool()` wrappers or OpenInference-style instrumentors when the provider is already in Trodo's auto-instrumented list (see `references/auto-instrumentation.md`).
 
+## The 6-phase loop
+
+Run these in order. **Phases 2–5 are a hard gate: write zero instrumentation code until UNDERSTAND is complete and CONFIRM is answered.** The single most common way this integration goes wrong is jumping straight to EXECUTE and wrapping whatever function looks like an "agent" — producing a trace that doesn't match how the code actually runs.
+
+1. **DETECT** — language, framework, provider, runtime, existing OTel (the Detect table below). Mechanical: read imports and lockfiles.
+
+2. **UNDERSTAND — map the whole stack before touching anything.** This is the phase people skip, and it is the whole job. Read the code until you can answer, from memory:
+   - **Every agent entry point.** How many are there? One `answer()`? A queue consumer? Three routes? An `agents/` directory with six files? Enumerate them — never assume there is exactly one.
+   - **The real execution flow of each.** What actually happens between request and response: which LLM calls, which tool dispatches, which retrieval / DB steps, which sub-agents, in what order. Trace the real graph, not an idealized one.
+   - **Which steps are genuine, distinct, signal-carrying operations** — an LLM call, a tool your code dispatches, a vector search — versus plumbing (a getter, a string format, a validation branch) that isn't worth a span.
+   - **Where run context can and cannot flow** — one process (auto-nests via AsyncLocalStorage / contextvars) vs across HTTP / workers / a websocket / an MCP boundary (needs propagation or a different primitive).
+   - **What already emits spans** — auto-instrumented providers (§2) and any existing OTel pipeline. Anything auto-captured must NOT be re-wrapped.
+
+   If you can't describe each entry point's flow without re-reading, you haven't understood it yet — keep reading. If the codebase is large or the flow is unclear, spawn an Explore/general-purpose agent to map it before proceeding.
+
+3. **ANALYZE** — with the map in hand, load the one matching framework module and walk the decision tree. This picks the integration *shape* (SDK vs OTLP; `wrapAgent` vs `startRun` vs `trackMcp`).
+
+4. **PLAN** — for each entry point, decide exactly what gets instrumented: the outer wrap, plus the specific manual spans (if any) that mirror the real steps found in UNDERSTAND. Nothing speculative. If the plan lists a span you can't point to a real operation for, delete it.
+
+5. **CONFIRM** — surface the always-ask questions (distinctId, run scope) and, when more than one entry point / framework exists, which to instrument. Use `AskUserQuestion`. Do not proceed on assumption. See Clarify.
+
+6. **EXECUTE** — write the code that matches the plan. Init once, wrap the confirmed entry points, add only the manual spans the plan named, then verify against the pitfalls.
+
+### Instrument the real process — nothing more
+
+The trace must be a faithful map of what the code actually does. Concretely:
+
+- **One span per real step, and only real steps.** A step earns a span when it's a distinct operation you'd want to see, time, or debug on its own: an LLM call, a tool/function dispatch, a retrieval, a meaningful sub-stage. Getters, formatters, trivial helpers, and control-flow branches do not get spans.
+- **Never invent structure that isn't in the code.** Don't add a `retrieval` span where there is no retrieval, a `tool` span where nothing is dispatched, or three staged spans because a function *could* be split into three. Wrap what runs, shaped the way it runs.
+- **Don't double-instrument.** If a provider is auto-instrumented (§2) or a framework owns the tool call site, those spans already appear — wrapping them again produces duplicates and double-counts tokens/cost. Manual spans fill the gaps auto-instrumentation leaves; they don't re-decorate what it already covers.
+- **When in doubt, wrap the outer entry point only and stop.** Auto-instrumentation fills in the LLM (and framework tool) spans underneath. Add manual spans only where UNDERSTAND found a real, uncovered step. Fewer accurate spans beat a dense tree that doesn't match reality.
+
 ## How to access docs
 
 Base URL: `https://docs.trodo.ai`
@@ -115,7 +147,7 @@ Inspect imports and file structure before deciding anything:
 |---|---|
 | **Language** | `.ts`/`.js`/`.mjs`/`.cjs` = TypeScript / JavaScript · `.py` = Python |
 | **Framework** | `from 'ai'` = Vercel AI SDK · `from '@openai/agents'` = OpenAI Agents SDK · `from 'langchain'` or `from langchain` = LangChain · `from 'llamaindex'` or `from llama_index` = LlamaIndex · `from 'haystack'` = Haystack (Python only) |
-| **Provider** | `from 'openai'` / `from openai` = OpenAI · `from '@anthropic-ai/sdk'` / `from anthropic` = Anthropic · `from '@aws-sdk/client-bedrock-runtime'` / `import boto3` bedrock = Bedrock · `from 'cohere-ai'` / `from cohere` = Cohere · `from '@google/generative-ai'` / `from google.generativeai` = Google Gemini · `@google-cloud/vertexai` / `from vertexai` = Vertex AI · `from '@mistralai/mistralai'` / `from mistralai` = Mistral |
+| **Provider** | `from 'openai'` / `from openai` = OpenAI · `from '@anthropic-ai/sdk'` / `from anthropic` = Anthropic · `from '@aws-sdk/client-bedrock-runtime'` / `import boto3` bedrock = Bedrock · `from 'cohere-ai'` / `from cohere` = Cohere · `from '@google/genai'` (auto-instrumentable, v1.x only) or `from '@google/generative-ai'` (legacy, manual only) / `from google.generativeai` = Google Gemini · `@google-cloud/vertexai` / `from vertexai` = Vertex AI · `from '@mistralai/mistralai'` / `from mistralai` = Mistral |
 | **Streaming** | `streamText`, `messages.stream()`, `messages.create({ stream: true })`, `stream=True` in Python, async generator patterns, SSE response (`text/event-stream`) |
 | **Existing OTel** | `@opentelemetry/` imports, `NodeTracerProvider`, `TracerProvider`, `BatchSpanProcessor`, `OTLPTraceExporter`, `tracer.start_as_current_span` |
 | **Runtime** | `next.config.*` or `app/` / `pages/` = Next.js · `express()` / `fastify()` = Node server · `FastAPI()` / `Flask()` = Python server · otherwise standalone script |
@@ -274,7 +306,7 @@ The SDK errors with the install hint above if you call `mode: 'otlp'` without th
 This is the common case. Trodo auto-instruments these providers when `trodo.init()` runs:
 
 - **Node:** `anthropic`, `openai`, `langchain`, `@aws-sdk/client-bedrock-runtime`, `cohere-ai`, `@google/generative-ai`, `@google-cloud/vertexai`, `llamaindex`, `ai` (Vercel AI SDK), `http` / `fetch`.
-- **Python:** `anthropic`, `openai`, `langchain`, `llama_index`, `google.generativeai`, `vertexai`, `boto3` (Bedrock), `cohere`, `mistralai`, `haystack`, `httpx`, `requests`.
+- **Python:** `anthropic`, `openai`, `langchain`, `llama_index`, `google-genai` (new SDK — the deprecated `google.generativeai` is NOT instrumented), `vertexai`, `boto3` (Bedrock), `cohere`, `mistralai`, `haystack`, `httpx`, `requests`.
 
 → If detected, the full integration is three things:
 
@@ -342,7 +374,29 @@ If you're still on `trodo-node <= 2.4.1`, use the "Full recipe (legacy SDK)" fur
 - **On trodo-node ≤ 2.4.1**: runs appear in the dashboard with `SPANS=0` (auto-instrument silently registered nothing because `require` is undefined or `Resource` threw), **or** ingest returns 500 because child OTel span ids are 16-hex while the parent is UUID, **or** debug logs show `NoopTracerProvider` even after `trodo.init()` returned.
 - **On trodo-node ≥ 2.4.2 with raw `openai` import**: first OpenAI call throws `Cannot read properties of undefined (reading 'call')` deep in `openai/core.mjs` because IITM broke `openai/_shims/registry.mjs`'s mutate-let-export pattern. (This one is upstream, not in our SDK.)
 
-#### Lean recipe (trodo-node ≥ 2.4.2)
+#### Shipped bootstrap (trodo-node ≥ 2.10.9) — preferred
+
+On `trodo-node >= 2.10.9` you no longer hand-write `register.mjs` — the package
+ships one. Start the app with:
+
+```bash
+node --import trodo-node/register your-app.js
+```
+
+It registers the OTel ESM loader hook + the OpenAI shims + calls `trodo.init()`
+(reads `TRODO_SITE_ID`; optional `TRODO_DEBUG=1`) BEFORE your entry module links,
+so raw `openai` imports are patched. **Do not also call `trodo.init()`** in the
+app — the bootstrap did it, and `init()` is idempotent by siteId so a duplicate
+call is a safe no-op (it will NOT spin up a second span pipeline).
+
+**Scope (verified live):** the bootstrap makes the raw **`openai`** SDK
+auto-capture under ESM. The raw **`@anthropic-ai/sdk`** and **`@google/genai`**
+SDKs are still NOT captured under ESM even with it — their
+`@traceloop/instrumentation-*@0.27` instrumentors don't hook ESM imports. For
+those under ESM, use a CommonJS entry or wrap the call with `trodo.llm(...)`.
+LangChain and the Vercel AI SDK capture under ESM without the bootstrap.
+
+#### Lean recipe (hand-written, trodo-node 2.4.2 – 2.10.8)
 
 If you're using the raw `openai` SDK, you may need to preload its Node shims so IITM doesn't leave `client.fetch === undefined`. **Critical:** the shim registry throws on re-init (`can't import 'openai/shims/node' after import 'openai/shims/node'`), so the preload MUST be guarded — recent `openai` versions auto-wire the shims at module load.
 
@@ -551,6 +605,20 @@ Requires `trodo-node >= 2.2.0` / `trodo-python >= 2.2.0`. If the user is on an o
 
 When NOT to reach for this: if the entire run can be expressed inside one async function, prefer `wrapAgent` — simpler and one HTTP call to the backend.
 
+## Span kinds — what each is for, and when NOT to emit one
+
+Every span (and every run) carries a `kind`. The SDK defines exactly five: `agent`, `llm`, `tool`, `retrieval`, `generic`. Pick the kind that matches what the step *really is* — the dashboard groups, costs, and analyses by kind, so a mislabeled span skews the numbers, and an invented span skews the trace. If no kind genuinely fits a step, that's usually the sign it shouldn't be a span at all.
+
+| Kind | Represents | Created by | Use it for | Do NOT use it for |
+|---|---|---|---|---|
+| `agent` | A whole **run** — one top-level unit of agent work, the root of a trace | `wrapAgent` / `startRun` (never hand-set) | The one outermost entry point per logical run | A sub-step inside a run (that's a child span, not a new run); an MCP `tools/call` (use `trackMcp`); nesting `wrapAgent` inside `wrapAgent` (makes two sibling runs) |
+| `llm` | A single **model call** — prompt in, completion out, with tokens + cost | Auto-instrumentation (preferred); or `llm()` / `trackLlmCall` / `withSpan({ kind: 'llm' })` for uncovered providers | A raw call to a provider Trodo does **not** auto-instrument (Ollama, vLLM, a partner inference API) | A call to an already auto-instrumented provider (§2) — re-wrapping double-counts tokens and cost |
+| `tool` | A **tool / function** the agent invokes — a side-effecting action or external call | `tool()` / `withSpan({ kind: 'tool' })`; auto-captured only when a framework owns the call site (LangChain, Vercel AI SDK, OpenAI Agents SDK, LlamaIndex, Haystack) | The dispatch of a **raw-provider** function/tool call — your code runs it after `tool_calls[]` / `tool_use` | The LLM call that *decided* to use the tool (that's `llm`); a framework tool that already auto-captures (would duplicate) |
+| `retrieval` | A **lookup that fetches context** — vector search, DB query, document/memory fetch | `retrieval()` / `withSpan({ kind: 'retrieval' })` | RAG retrieval, semantic/keyword search, a knowledge-base or memory read that feeds the model | A DB write or unrelated query with no retrieval semantics (use `generic`, or no span) |
+| `generic` | A named **step that matters for debugging** but isn't LLM/tool/retrieval | `trace()` / `withSpan({ kind: 'generic' })` | A real sub-stage worth seeing on its own: a planner, an orchestrator, validation, post-processing, a cache lookup | Trivial plumbing — getters, string formatting, control flow. If you can't say why you'd open it in a trace, don't emit it |
+
+**The default is fewer spans.** `wrapAgent` (one `agent` run) plus auto-instrumented `llm` children is a complete, correct trace for most agents. Reach for `tool` / `retrieval` / `generic` only where UNDERSTAND found a genuine step that auto-instrumentation doesn't already cover — see "Instrument the real process — nothing more" above.
+
 ## Handle reference — what each callback gives you
 
 The skill uses several callbacks; each yields a different handle with a different API. Mixing them up is the #1 runtime error in fresh installs.
@@ -558,7 +626,7 @@ The skill uses several callbacks; each yields a different handle with a differen
 | Helper | Callback signature | Handle methods |
 |---|---|---|
 | `wrapAgent(name, async (run) => …)` | `RunHandle` | `setInput(obj)`, `setOutput(obj)`, `setMetadata(obj)` — **no `setAttribute`** |
-| `startRun(name, …)` → `joinRun(runId, async (run) => …)` | `RunHandle` | same as above |
+| `startRun(name, …)` → `joinRun(runId, parentSpanId, async (run) => …)` — `parentSpanId` is a REQUIRED positional (pass `null` when none) | `RunHandle` | same as above |
 | `withSpan(name, async (span) => …, { kind })` | `SpanHandle` | `setInput`, `setOutput`, `setAttribute(key, value)`, `setLlm({...})`, `setTool(name)` |
 | `tool(name, fn)` / `llm(...)` / `retrieval(...)` / `trace(...)` | factory — calling the inner fn yields no handle; span is built from arguments + return value | n/a |
 

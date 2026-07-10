@@ -105,13 +105,27 @@ Delegate to [`trodo-tracing`](../trodo-tracing/SKILL.md). That skill:
    vs MCP runless spans vs ESM `register.mjs` bootstrap.
 5. CONFIRM → EXECUTE.
 
-## Step 4 — Phase C: heal / developer skills (future)
+## Step 4 — Phase C: heal / diagnose mode
 
-When `trodo-heal-*` skills exist, this orchestrator also dispatches
-diagnose-mode requests like *"my LLM calls aren't showing as child spans"*
-or *"why are my events under server_global"* to the right heal skill. Same
-6-phase contract; the heal skill detects the symptom in real code,
-identifies which invariant is broken, plans a diff, confirms, applies.
+When the prompt describes a *symptom* rather than an install — "something's
+wrong with my Trodo traces", "my LLM calls aren't showing as child spans",
+"runs show error but no message", "a step failed but shows ok", "audit my
+tracing" — this is diagnose mode, not install. Route to the matching heal
+skill instead of `trodo-events` / `trodo-tracing`:
+
+| Symptom in the prompt | Route to |
+|---|---|
+| Any gap in an **existing agent-tracing** setup — missing/incomplete spans, false "ok" on failures, error-with-no-message, empty/truncated output, anon users, stuck-running runs, double-tracking, "audit my tracing" | [`trodo-heal-tracing`](../trodo-heal-tracing/SKILL.md) |
+| Events under `server_global`, other events/identity symptoms (until a dedicated heal skill ships) | `trodo-events` (identify module) in diagnose framing |
+
+The heal skill runs the same 6-phase contract: it detects the symptom in real
+code, identifies which invariant is broken, shows a gap report, confirms, and
+applies only approved fixes. As with install, you never write the fix yourself
+— you delegate and surface the plan.
+
+Distinguish install from heal by intent: "add / set up / install / trace X"
+→ install master; "why / fix / audit / missing / wrong / broken" over an
+existing setup → heal.
 
 ## Direct invocation also works
 
