@@ -56,8 +56,18 @@ boundary. Sweep for call sites (`chat.completions`, `messages.create`, `generate
 `setInterval`, …) and walk outward to the trigger. Never rely on file names, never
 assume there is exactly one agent, never stop at the first one you find.
 
-Large repo or unclear flow → delegate the sweep to an explore agent with the grep table
-and have it return the filled table. Do not guess rows.
+Large repo or unclear flow → delegate the sweep to explore agents with the grep table
+and have them return the filled table. Do not guess rows, and **do not move to step 2
+until every sweep has returned**. If an area cannot be swept, list it under "not
+audited" in the plan instead of dropping it silently.
+
+Two checks per row before it counts:
+- **Is it live?** A route or job with no caller in the repo and no deploy target (a
+  service the code stopped calling) is dead code — list it as such and skip it.
+- **Which process runs it, and does that process call `init`?** Every deployable process
+  (web server, each worker, each cron/job entry) needs its own `init` at start, before
+  any work runs. A worker that inits lazily, or never, emits nothing for the jobs it
+  runs before that point.
 
 ### 2. Decide the shape → one trace tree per entry point
 
@@ -133,7 +143,11 @@ spans to the trees from step 2 using the checklist in `run-model.md` §11: run c
 and names, nesting depth, LLM spans with tokens, tool spans with `tool_name` + input +
 output, run input/output populated, `distinctId` / `conversationId` / `parentRunId`
 present, failures red with a message, no `running` rows, one-shot processes flushed.
-If the Trodo MCP is connected, query the runs instead of reading logs. Report exactly
+If the Trodo MCP is connected, query the runs instead of reading logs. Also confirm
+the SDK is really live in each deployed process: some codebases wrap `trodo` in a
+stub that silently no-ops when the package fails to load, and a serverless bundle can
+drop an optional dependency. One run per deployed agent visible in the dashboard is
+the proof; a local debug run is not. Report exactly
 what you saw; fix any mismatch before calling it done. If you could not run it, say so
 and give the user the checklist to run.
 

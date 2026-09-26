@@ -66,7 +66,26 @@ Grouped by the invariant broken. Fixes point at the reference that has the recip
   run. One run per turn + `conversationId`.
 - `wrapAgent` / `startRun` around an MCP `tools/call` → empty runs, rows stuck
   `running`. `trackMcp`.
-- `startRun` with no guaranteed `endRun` → stuck `running`.
+- `startRun` with no guaranteed `endRun` → stuck `running`. Check the production data
+  too: runs still `running` hours later are this bug, and their agent name points at
+  the path.
+- `endRun` on a failed run that passes the failure only in `metadata` → the run reads
+  green. Failures need `status: 'error'` and `errorSummary`.
+- `endRun` called twice for one run (at a pause and again at the resume or expiry) →
+  the second call overwrites the real output.
+- A run opened **before** a step that can fail (a DB insert, an enqueue, a credit
+  check) with no `endRun` on that failure path → stuck `running`. Open the run after
+  the fallible setup, or end it in the `catch`.
+- A **timeout or ceiling race** (`Promise.race`, `withTimeout`, an abandoned `asyncio`
+  task) that ends the run or span while the losing branch keeps making LLM calls → the
+  run closes early, its late spans are dropped or land after the end, and a second
+  `endRun` often follows. Record the abandonment (`setError` / `setLevel('warning')`)
+  and stop or detach the loser explicitly.
+- Error handling that calls the "finish" path in both an inner `catch` and an outer
+  one → two `endRun`s for one failure.
+- A nested execution of the same system (a sub-workflow, a sub-agent run, an agent step
+  that calls another product surface) opened as its own run with no `parentRunId` →
+  unlinked sibling runs. Link it, or make it a span.
 - Manual `agent` spans over framework-owned handoffs (LangGraph, LlamaIndex, Vercel AI
   steps) → duplicated layer.
 - Queue consumer wrap with no `parentRunId` / `conversationId` / `distinctId` from the
@@ -96,7 +115,9 @@ Grouped by the invariant broken. Fixes point at the reference that has the recip
   `ai.prompt` / `gen_ai.*` → tokens present, content blank.
 
 **Failures** (`run-model.md` §8)
-- `try/catch` that returns an error object without `setError` → green failure.
+- `try/catch` that returns an error object without `setError` → green failure. Check
+  sub-agent and fan-out workers especially: a failed worker whose result is caught and
+  folded into the parent (`ok: false`, `.catch(() => null)`) leaves its span green.
 - `throw 'failed'` / `throw { code }` / a provider error re-wrapped without its
   `.message` / `.status` → red with no message or no status code.
 - A span processor that strips span events → the `exception` event never leaves.
@@ -106,6 +127,16 @@ Grouped by the invariant broken. Fixes point at the reference that has the recip
 - A different identifier on `wrapAgent` vs `trackMcp` vs `startRun` vs job payloads →
   one person split across profiles.
 - Turns with no `conversationId` though a thread id is in scope.
+
+**Coverage**
+- A deployable process (a queue worker, a cron entry, a second web app) that makes LLM
+  calls but never calls `init`, or calls it lazily after it has started taking jobs →
+  that whole process is dark.
+- LLM calls through an in-house transport (plain `axios` / `fetch` / `httpx` to a model
+  endpoint) with no provider SDK underneath → auto-instrumentation sees nothing; each
+  call needs a manual `llm` span or `trackLlmCall`, and each entry point a run.
+- The installed SDK version: `< 2.23` is a finding on its own (check the lockfile, not
+  just the range in the manifest).
 
 **Config** (`runtimes.md`)
 - `NEXT_PUBLIC_` / `VITE_` on the site id.

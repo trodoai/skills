@@ -173,6 +173,11 @@ returns. Two shapes work (full code in `runtimes.md` §Streaming and `long-sessi
 
 Never return the stream object from inside a `wrapAgent` callback.
 
+**Streams relayed through a bus** (Redis pub/sub, an events table, a websocket fan-out):
+the run belongs to the process that produces the answer, not the one relaying it. If
+that producer finishes the full answer before it ends the run, nothing special is
+needed; the relay needs no tracing.
+
 ## Pitfalls
 
 - **Calling `run.setOutput` mid-stream.** Records a partial value; the dashboard shows half the answer.

@@ -59,6 +59,13 @@ Import `wrapAgent` / `wrap_agent` etc. from this module, not from the SDK, at ev
 site. Verify the disabled path once: run a one-shot entry point without `TRODO_SITE_ID`
 and confirm it exits 0.
 
+**More than one Trodo project in one process.** A module may build its own
+`new TrodoClient({ siteId, autoInstrument: false })` so one agent reports to a separate
+Trodo project (an internal pipeline kept apart from product telemetry). That is
+legitimate. Keep auto-instrumentation on exactly one client (the process-wide `init`),
+call `wrapAgent` / `withSpan` on the client that owns the agent, and never send the same
+agent to two sites. Record which site each agent reports to in the Stack Map.
+
 A **shared provider client constructed at module top level** (`export const openai = new OpenAI()` in `lib/llm.ts`, imported by the entry file) is the most common reason LLM spans are missing: the module graph evaluates `lib/llm.ts` before the line that calls `init()`. Fix by putting `init()` in its own module imported **first**, or by making the client lazy.
 
 ---
