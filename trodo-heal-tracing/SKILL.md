@@ -1,9 +1,9 @@
 ---
 name: trodo-heal-tracing
-version: 1.0.0
-sdk_version_node: ">=2.9.0"
-sdk_version_python: ">=2.9.0"
-last_updated: 2026-07-10
+version: 1.3.0
+sdk_version_node: ">=2.23.0"
+sdk_version_python: ">=2.23.0"
+last_updated: 2026-09-25
 description: >-
   Audit an existing Trodo agent-tracing integration, find the gaps that make
   the dashboard lie, propose a fix for each, and — once approved — apply it.
@@ -121,7 +121,7 @@ change no code until the gap report is shown and the user approves.**
 1. **DETECT (inventory)** — find every piece of existing instrumentation and
    every agent entry point. See "Inventory".
 2. **UNDERSTAND** — for each entry point, trace the *real* execution flow (the
-   same discipline as `trodo-tracing` §"The 6-phase loop" → UNDERSTAND): which
+   same discipline as `trodo-tracing/references/stack-map.md`): which
    LLM calls, tool dispatches, retrievals, sub-agents actually run. This is the
    ground truth you compare the trace against. If the codebase is large, spawn
    an Explore/general-purpose agent to map it.
@@ -176,21 +176,23 @@ and its references rather than restating recipes.
 | **Provider error re-wrapped, status/type lost** | Catch block that wraps the provider error in a generic `AppError('LLM failed')`, dropping `err.status` / `err.name` | Status shows error but `status_code` and `error_type` are null | When re-wrapping, carry the fields forward: `new AppError(msg, { cause: err, status: err.status })`, or call `setError({ message, type: err.name, statusCode: err.status })`. |
 | **OTLP pipeline strips span events** | A custom `SpanProcessor` / redaction layer in the client's OTel setup that clears `span.events` before export | Vercel AI / raw-provider spans show error, no message/stack (message lives in the `exception` event, which was removed) | Stop stripping the `exception` event, or re-attach the message as `span.setStatus({ code: ERROR, message })` so it survives as `status.message` (which Trodo also reads). |
 | **Vercel AI error not recorded** | App wraps `generateText`/`streamText` in its own try/catch and swallows before the AI SDK's error recorder runs, or the thrown value isn't an `Error` | `ai.*` span shows error, empty message | Let the AI SDK see the throw (it calls `recordException` itself), or set `experimental_telemetry.metadata` won't help here — ensure the error reaching the span is an `Error` instance. |
-| **Degraded capture on old SDK** | `trodo-node` < 2.9.0 / `trodo-python` < 2.9.0 | Errors capture `type`+`message` only; no `status_code`, `stack_trace`, or `level` | Upgrade to ≥ 2.9.0. See [`references/manual-instrumentation.md`](../trodo-tracing/references/manual-instrumentation.md) "Error handling is automatic". |
+| **Old SDK** | `trodo-node` / `trodo-python` < 2.23 | Missing fixes: thin error capture, LangChain double counting, Vercel AI v7 not captured, nested-wrap warning | Upgrade to ≥ 2.23 before anything else. |
 
 > **The rule for this group:** an errored step must (a) be *marked* errored —
-> which happens automatically only when an exception propagates — and (b) carry a
-> *message* — which requires the thrown value to be an `Error`, or an explicit
+> which happens on a propagating exception, or on an explicit `setError` /
+> `set_error` (run level: `setErrorSummary` / `set_error_summary`) — and (b) carry a
+> *message* — which requires the thrown value to be an `Error`, or that same explicit
 > `setError`. Break either and you get exactly the "error with no message" (or
-> worse, "ok on a failure") the user is seeing.
+> worse, "ok on a failure") the user is seeing. Code that catches and returns an
+> error object is the common case: it needs `setError`, not a refactor to re-throw.
 
 ### B. Missing-span gaps
 
 | Gap | Detection signal | Symptom | Fix |
 |---|---|---|---|
-| **Dark entry point** | An agent entry point (Inventory B) with no `wrapAgent`/`startRun`/`trackMcp` | Run never appears | Wrap it — pick the shape by runtime (`trodo-tracing` decision tree §2/§5a/§5b). |
-| **Provider imported before `init`** | `import OpenAI ...` above `trodo.init()`, or client constructed at module top-level before init | Run appears, **no child LLM spans** | Move `init()` before all provider imports; in Next.js into `instrumentation.ts`; pure-ESM → `--import trodo-node/register`. See `trodo-tracing` §2a + Critical constraints. |
-| **Raw-provider tool calls not wrapped** | `openai`/`anthropic`/Gemini call with `tools:[...]`, then your code dispatches `tool_calls[]`/`tool_use` with no `trodo.tool`/`withSpan` around it | LLM span present, the tool execution emits nothing | Wrap the dispatch: `trodo.tool(name, fn)` or `withSpan(name, fn, {kind:'tool'})`. Auto-capture only covers framework-owned tools (LangChain/Vercel AI/Agents SDK). See `trodo-tracing` §2 table. |
+| **Dark entry point** | An agent entry point (Inventory B) with no `wrapAgent`/`startRun`/`trackMcp` | Run never appears | Wrap it — pick the shape by the rule in `trodo-tracing/references/run-model.md` §2. |
+| **Provider imported before `init`** | `import OpenAI ...` above `trodo.init()`, or client constructed at module top-level before init | Run appears, **no child LLM spans** | Move `init()` before all provider imports; in Next.js into `instrumentation.ts`; pure-ESM → `--import trodo-node/register`. See `trodo-tracing/references/runtimes.md` and `auto-instrumentation.md` §Ordering. |
+| **Raw-provider tool calls not wrapped** | `openai`/`anthropic`/Gemini call with `tools:[...]`, then your code dispatches `tool_calls[]`/`tool_use` with no `trodo.tool`/`withSpan` around it | LLM span present, the tool execution emits nothing | Wrap the dispatch: `trodo.tool(name, fn)` or `withSpan(name, fn, {kind:'tool'})`. Auto-capture only covers framework-owned tools (LangChain/Vercel AI/Agents SDK). See `trodo-tracing/references/frameworks.md`. |
 | **Retrieval step invisible** | A vector search / KB lookup feeding the prompt, un-wrapped | RAG context source is dark in the trace | Wrap with `trodo.retrieval(name, fn)` — only if it's a real retrieval. |
 | **`autoInstrument: false`** left in config | grep the init options | No framework spans nest | Remove the override (default `true`) unless an OTLP path deliberately owns instrumentation. |
 | **Missing `experimental_telemetry`** on a Vercel AI call | any `generateText`/`streamText`/`generateObject` without `experimental_telemetry:{isEnabled:true}` | That call produces no spans | Add it to **every** call. |
@@ -199,9 +201,9 @@ and its references rather than restating recipes.
 
 | Gap | Detection signal | Symptom | Fix |
 |---|---|---|---|
-| **Stream returned unconsumed** | `wrapAgent` callback returns a stream/promise handle without awaiting it | Output empty or truncated mid-sentence | Consume first, then `setOutput`; for Vercel AI use `onFinish` / `await result.text`. `trodo-tracing` Output-capture Rule 1. |
+| **Stream returned unconsumed** | `wrapAgent` callback returns a stream/promise handle without awaiting it | Output empty or truncated mid-sentence | Consume first, then `setOutput`; for Vercel AI use `onFinish` / `await result.text`. `trodo-tracing/references/run-model.md` §4 and `streaming.md`. |
 | **Summary instead of payload** | `setOutput({ summary })` / `set_output({status})` dropping the real result | Output panel useless for debugging | `setOutput(fullPayload)`; put scalars in `setAttribute`. Rule 2. |
-| **Hand-sliced output** | `.slice(0, 500)` / `[:500]` before `setOutput` | Output cut off though source was complete | Remove the slice — SDK caps at 64 KB. Rule 3. |
+| **Hand-sliced output** | `.slice(0, 500)` / `[:500]` before `setOutput` | Output cut off though source was complete | Remove the slice — SDK caps at 1 MB. Rule 3. |
 | **Blank output** | wrapped fn returns `undefined`/`None` and no `setOutput` | Output blank | Return the result, or call `setOutput` explicitly. |
 | **Vercel AI `recordInputs`/`recordOutputs` off** (OTLP path) | `experimental_telemetry: { isEnabled: true, recordInputs: false }` or `recordOutputs: false` | Span present with tokens/cost, but **input and/or output blank** (the framework never emitted `ai.prompt` / `ai.response.text`) | Remove the override — both default `true` when telemetry is enabled. This is the OTLP-path analog of a missing `setOutput`. |
 | **A span processor strips prompt/response** (OTLP path) | a redaction/PII `SpanProcessor` in the client's OTel setup that deletes `ai.prompt` / `ai.response.text` / `gen_ai.*` before export | Input/output blank though telemetry config looks right | Narrow the redaction so it doesn't remove the whole attribute (mask the value instead), or accept the trade-off. Same failure shape as the exception-event stripping in group A. |
@@ -210,18 +212,26 @@ and its references rather than restating recipes.
 
 | Gap | Detection signal | Symptom | Fix |
 |---|---|---|---|
-| **No `distinctId`** | `wrapAgent(name, fn)` with no `distinctId`; OTLP calls with no `ai.telemetry.metadata.userId` | Every run is a fresh anon user; no per-user funnels | Thread the app's real user id (**ask which**, per `trodo-tracing` Clarify §1 — never impose). |
+| **No `distinctId`** | `wrapAgent(name, fn)` with no `distinctId`; OTLP calls with no `ai.telemetry.metadata.userId` | Every run is a fresh anon user; no per-user funnels | Thread the app's real user id (resolution order in `trodo-tracing/references/run-model.md` §5; ask only on a tie). |
 | **Inconsistent id across surfaces** | `wrapAgent` uses `email`, `trackMcp` uses session id, `startRun` uses uuid | One human splits into 3 profiles | Pick one identifier and use it everywhere. Confirm with the user. |
 
 ### E. Structural / run-shape gaps
 
 | Gap | Detection signal | Symptom | Fix |
 |---|---|---|---|
-| **`wrapAgent` for an MCP server** | `wrapAgent` inside a `tools/call` handler | Each call = its own empty disconnected run | Switch to `trackMcp`/`track_mcp` (runless). `trodo-tracing` §5a. |
-| **`wrapAgent` across workers/websocket** | `wrapAgent` opened in one handler, meant to close in another | Can't bridge; run never closes cleanly | `startRun`+`joinRun`+`endRun`. §5b. |
+| **`wrapAgent` for an MCP server** | `wrapAgent` inside a `tools/call` handler | Each call = its own empty disconnected run | Switch to `trackMcp`/`track_mcp` (runless). `trodo-tracing/references/mcp-runless.md`. |
+| **`wrapAgent` across workers/websocket** | `wrapAgent` opened in one handler, meant to close in another | Can't bridge; run never closes cleanly | `startRun`+`joinRun`+`endRun` — but only for a single turn/job spanning requests; a chat session is one run per turn. `trodo-tracing/references/long-session.md`. |
 | **`startRun` never `endRun`** | a `startRun` with no guaranteed close path | Runs stuck **running** forever | Pair with a TTL sweeper / explicit close / `finally`. |
-| **Accidental nested `wrapAgent`** | `wrapAgent` called inside another `wrapAgent` | Two sibling runs, not a nested trace | Use `tool`/`trace` for sub-steps, or `parentRunId` for a genuine child run. |
-| **Double-tracking** | `withSpan` on caller **and** `fastapi_middleware`/`expressMiddleware` on callee for the same op; or an auto-instrumented provider also hand-wrapped with `llm()` | Every operation appears twice; tokens/cost double-counted | Remove one side. Auto-instrumented providers must not be re-wrapped; caller-owned spans → drop the callee middleware. `trodo-tracing` pitfalls + §2. |
+| **Accidental nested `wrapAgent`** | `wrapAgent` called inside another `wrapAgent` | Two sibling runs, not a nested trace | Sub-agent → `withSpan(name, fn, {kind:'agent'})` / `trodo.span(name, kind='agent')`; other sub-steps → `tool`/`trace`; `parentRunId` only for independently-triggered work. |
+| **`wrapAgent` per sub-agent, where the sub-agent has no independent trigger** | more than one `wrapAgent`/`wrap_agent` reachable from a single entry point's call graph — a supervisor loop, `Promise.all`/`asyncio.gather` over per-item agents, a `Task`/spawn helper — **and** the inner agents have no route, queue, cron or retry policy of their own | One user request becomes N disconnected runs; no row holds the request's true cost or latency; the delegation tree is unrecoverable | Wrap once at the entry point; make those sub-agents `agent`-kind child spans (`withSpan(..., {kind:'agent'})` / `trodo.span(..., kind='agent')` — `wrapAgent` is run-level and cannot nest). **Verify the trigger test per agent before reporting this** — an agent with its own trigger is correctly its own run. `trodo-tracing/references/run-model.md` §2. |
+| **Separate agents merged into one run** | one `wrapAgent` spanning agents that have their own routes / queues / crons / retry policies, often introduced by applying "one request, one run" as a rule | Each agent loses its own name, success rate, latency and cost — buried inside a trace that belongs to something else. Not recoverable from stored data | Give each independently-triggered agent its own run, linked with `parentRunId`. Do not propose a merge unless the trigger test says the inner agent has no independent existence. |
+| **Sub-agent spans layered on framework-owned handoffs** | manual `agent` spans around OpenAI Agents SDK handoffs / LangGraph nodes / LlamaIndex workers | Duplicated layer in the waterfall; tree lies about depth | Those frameworks emit sub-agent spans themselves — remove the manual layer. |
+| **Whole chat session in one `wrapAgent`** | a wrap whose lifetime is the session, not the turn | One enormous run; per-turn latency/cost/quality unrecoverable; run sits `running` | One run per turn + `conversationId`. |
+| **Multiplexed route as one agent** | one `wrapAgent` named after a dispatcher (`tasks`, `run`, `handler`) around a `switch` on `type`/`kind`/`event` | Unrelated agents share one name, success rate and cost | One run per branch, each with its own agent name. `trodo-tracing/references/run-model.md` §2–3. |
+| **Linked job run missing thread/user** | a queue consumer `wrapAgent` with `parentRunId` but no `conversationId` / `distinctId` from the enqueuing run | Job runs are `anon_*` and never show in the thread | Carry `runId`, `conversationId`, `distinctId` in the job payload. `trodo-tracing/references/runtimes.md` §Queues. |
+| **Detached work lost** | `setImmediate` / un-awaited promise / `create_task` / `BackgroundTasks` doing LLM work after the wrap returned | Span count lower than the code's call count; the follow-up LLM call is invisible | Await it before the wrap returns, or `joinRun(currentRunId(), …)` inside the task. `runtimes.md` §Detached work. |
+| **Multi-turn chat with no `conversationId`** | `wrapAgent` per turn with no `conversationId`/`conversation_id` and a thread id available nearby | Turns never group; no conversation view, no conversation-level evals | Pass the app's thread/session id as `conversationId`. |
+| **Double-tracking** | `withSpan` on caller **and** `fastapi_middleware`/`expressMiddleware` on callee for the same op; or an auto-instrumented provider also hand-wrapped with `llm()` | Every operation appears twice; tokens/cost double-counted | Remove one side. Auto-instrumented providers must not be re-wrapped; caller-owned spans → drop the callee middleware. `trodo-tracing/references/frameworks.md` and `cross-service.md`. |
 
 ### F. Config / ordering gaps
 
@@ -229,7 +239,7 @@ and its references rather than restating recipes.
 |---|---|---|---|
 | **`NEXT_PUBLIC_`/`VITE_` on the site id** | client-prefixed env var | Site id in client bundle; server may read nothing | Rename to `TRODO_SITE_ID`, read server-side only. |
 | **Short-lived script exits before flush** | pure-ESM/CLI script that doesn't `await` the top-level `wrapAgent` + `trodo.shutdown()` | Run never lands, no error | `await` the wrap and `await trodo.shutdown()`/`flush()` before exit. |
-| **OTLP `mode:'otlp'` expecting nested children** | `registerOTel({mode:'otlp'})` with an expectation that auto spans nest under `wrapAgent` | Auto-instrumented spans become their own runs | Use default `mode:'trodo'` for unified runs, or accept separate runs. §0b caveat. |
+| **OTLP `mode:'otlp'` expecting nested children** | `registerOTel({mode:'otlp'})` with an expectation that auto spans nest under `wrapAgent` | Auto-instrumented spans become their own runs | Use default `mode:'trodo'` for unified runs, or accept separate runs. `trodo-tracing/references/dual-export.md`. |
 
 ## Gap report — what to show the user (PLAN → CONFIRM)
 
@@ -255,7 +265,7 @@ let the user choose — same non-imposition rule as `trodo-tracing`.
 
 When you apply approved fixes, obey the same rule that governs first-time
 install — **instrument the real process, nothing more** (`trodo-tracing`
-§"Instrument the real process"):
+SKILL.md step 2 and `references/run-model.md`):
 
 - Fix the gap with the **smallest change** that restores the invariant. A
   missing error message is a one-line re-throw, not a rewrite of the handler.
@@ -288,8 +298,6 @@ Confirm the specific symptom is gone — not just that code changed.
 ## Scope — what this skill does NOT do
 
 - **First-time install** → `trodo-tracing`.
-- **Events / identity install** (server_global events, missing `identify`) →
-  `trodo-events` and its heal notes.
 - **Product bugs in Trodo itself** (ingest 500s, dashboard rendering) → these
   are not client-side gaps; escalate to Trodo support, don't "fix" them in the
   user's code. The one exception this skill *does* own: confirming a suspected

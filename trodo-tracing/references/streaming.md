@@ -1,6 +1,6 @@
 # Streaming — Integration Notes
 
-Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
+Targets `trodo-node` / `trodo-python` ≥ 2.23.
 
 Docs: `https://docs.trodo.ai/observability/features/instrumentation/long-running-runs`.
 
@@ -160,17 +160,22 @@ with trodo.wrap_agent("summariser") as run:
 
 ## SSE / server endpoints
 
-For Next.js / Express / FastAPI endpoints that return a stream to the browser, the run span needs to stay open until the server finishes streaming — not until the handler function returns (which is usually immediate).
+The run must stay open until the server has finished streaming, not until the handler
+returns. Two shapes work (full code in `runtimes.md` §Streaming and `long-session.md`):
 
-The cleanest pattern: keep the `wrapAgent` callback alive until `onFinish` fires, then return the response. `wrapAgent` awaits the callback's return before closing the run, so as long as the last thing in your callback awaits the stream-finished signal, the run stays open.
+- **Express / raw SSE:** keep `wrapAgent` around the whole `for await` loop that writes
+  chunks, call `run.setOutput(full)` after the loop, then return.
+- **Next.js / any handler that must return a `Response` before the stream ends:**
+  `startRun` before `streamText`, `endRun(runId, { output: text })` in `onFinish`
+  (and `endRun(..., { status: 'error' })` in `onError`), return the stream response.
 
----
+Never return the stream object from inside a `wrapAgent` callback.
 
 ## Pitfalls
 
 - **Calling `run.setOutput` mid-stream.** Records a partial value; the dashboard shows half the answer.
 - **Returning the stream object from `wrapAgent` without awaiting completion.** The callback resolves immediately, the run closes before the stream has produced tokens, and the persisted output is empty or partial. Always `await result.text` (or wait for `onFinish`) before returning.
-- **Hand-slicing the assembled text before `setOutput` (`text.slice(0, 500)`).** Caps the persisted run output for no reason; the SDK already truncates at 64 KB. Pass the full string.
+- **Hand-slicing the assembled text before `setOutput` (`text.slice(0, 500)`).** Caps the persisted run output for no reason; the SDK already truncates at 1 MB. Pass the full string.
 - **Capturing the run output from a function that returns the *promise* of the result.** The promise resolves to a stream / future result; what's captured is the promise itself or whatever it resolves to *at that instant*. Resolve / await first, then `setOutput`.
 - **Missing `stream_options.include_usage`** (OpenAI streaming). LLM span is created but tokens are zero.
 - **Missing `experimental_telemetry`** (Vercel AI SDK streaming). Same as non-streaming — no child LLM spans. See [`vercel-ai-sdk.md`](./vercel-ai-sdk.md).

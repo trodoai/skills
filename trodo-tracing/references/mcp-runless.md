@@ -26,9 +26,9 @@ The runless-span model fixes all of that: each `tools/call` is one self-containe
 
 ## The SDK helper — `track_mcp` / `trackMcp`
 
-Both Python and Node SDKs (>= 2.3.0) ship a single function for this. **Use it; don't write the HTTP yourself.** It handles span_id minting, conversation_id auto-uuid, ISO timestamps, JSON serialisation, error path, and 64KB truncation.
+Both SDKs ship a single function for this. **Use it; don't write the HTTP yourself.** It handles span_id minting, conversation_id auto-uuid, ISO timestamps, JSON serialisation, error path, and 1 MB truncation.
 
-### Python — `trodo-python >= 2.3.0`
+### Python
 
 ```python
 import time, trodo
@@ -63,7 +63,7 @@ async def handle_tool_call(req, tool_name, arguments):
 
 `track_mcp` returns the `span_id` if you want it for cross-system correlation; otherwise ignore it.
 
-### Node — `trodo-node >= 2.3.0`
+### Node
 
 ```typescript
 import trodo from 'trodo-node';
@@ -118,7 +118,7 @@ You're responsible for: **tool name, who's the user, what went in, what came out
 The same three rules from the main SKILL apply to runless spans:
 
 1. **Await the full result before serialising** — never write a streaming handle into `output`. Consume the stream, then call `track_mcp`.
-2. **Output is the FULL payload, not a metadata summary** — pass the entire ToolResult into `output`. The SDK truncates at 64KB if it's huge; never pre-slice.
+2. **Output is the FULL payload, not a metadata summary** — pass the entire ToolResult into `output`. The SDK truncates at 1 MB if it's huge; never pre-slice.
 3. **Use `attributes` for filterable scalars** — counts, status flags, the human summary string. Pass them via the `attributes={...}` / `attributes: {...}` kwarg.
 
 ## Dashboard query patterns

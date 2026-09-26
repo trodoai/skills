@@ -1,36 +1,39 @@
 {
   "name": "trodoai/skills",
-  "version": "2.1.0",
-  "description": "Trodo skill swarm — orchestrator + install masters (events, agent tracing) + a tracing heal/audit master. Each master loads modules inline for its sub-areas (identify, groups, custom events, sessions for events; vercel-ai, otel, langchain, openai, mcp for tracing). trodo-heal-tracing audits an existing tracing integration, finds the gaps that make the dashboard lie (false 'ok' on failures, error-with-no-message, missing spans, empty output, anon users, wrong run shape), proposes a fix per gap, and applies on approval. Further heal/developer skills slot in as additional top-level entries following the same 6-phase contract.",
+  "version": "3.0.0",
+  "description": "Trodo agent-tracing skills for trodo-node and trodo-python: trodo-tracing installs tracing (maps every agent entry point, decides the run boundary by a fixed rule in references/run-model.md, wires runs, spans, identity, conversation, input/output and metadata); trodo-heal-tracing audits an existing integration against the same run model and fixes the gaps that make the dashboard lie.",
   "skills": [
-    "trodo-install",
-    "trodo-events",
     "trodo-tracing",
     "trodo-heal-tracing"
   ],
   "modules": {
-    "trodo-events": [
-      "modules/identify.md",
-      "modules/groups.md",
-      "modules/custom-events.md",
-      "modules/sessions.md"
-    ],
     "trodo-tracing": [
-      "frameworks/vercel-ai.md",
-      "frameworks/otel.md",
-      "frameworks/openai.md",
-      "frameworks/langchain.md",
-      "frameworks/mcp.md"
+      "references/run-model.md",
+      "references/stack-map.md",
+      "references/frameworks.md",
+      "references/runtimes.md",
+      "references/auto-instrumentation.md",
+      "references/manual-instrumentation.md",
+      "references/streaming.md",
+      "references/long-session.md",
+      "references/cross-service.md",
+      "references/mcp-runless.md",
+      "references/vercel-ai-sdk.md",
+      "references/dual-export.md"
     ]
   },
   "bundles": {
-    "all": ["trodo-install", "trodo-events", "trodo-tracing", "trodo-heal-tracing"],
-    "events": ["trodo-install", "trodo-events"],
-    "agents": ["trodo-install", "trodo-tracing"],
-    "heal": ["trodo-install", "trodo-tracing", "trodo-heal-tracing"]
+    "all": [
+      "trodo-tracing",
+      "trodo-heal-tracing"
+    ],
+    "install": [
+      "trodo-tracing"
+    ],
+    "heal": [
+      "trodo-tracing",
+      "trodo-heal-tracing"
+    ]
   },
-  "default_bundle": "all",
-  "future_bundles": {
-    "heal": "Reserved for further developer/healing skills (trodo-heal-*). Same 6-phase skill contract; orchestrated by trodo-install in diagnose mode. trodo-heal-tracing (the tracing audit/heal master) has shipped; trodo-heal-server-global-events and others slot in here next."
-  }
+  "default_bundle": "all"
 }

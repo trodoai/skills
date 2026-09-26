@@ -1,6 +1,6 @@
 # Dual export — Integration Notes
 
-Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
+Targets `trodo-node` / `trodo-python` ≥ 2.23.
 
 Docs: `https://docs.trodo.ai/observability/features/instrumentation/opentelemetry`.
 

@@ -1,6 +1,6 @@
 # Manual Instrumentation — Integration Notes
 
-Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
+Targets `trodo-node` / `trodo-python` ≥ 2.23.
 
 Docs: `https://docs.trodo.ai/observability/features/instrumentation/manual-spans`.
 
@@ -75,28 +75,33 @@ Python wrappers preserve the full signature — no object-wrapping needed.
 
 ---
 
-## Structure LLM-node input: `{ query, context, system_instruction }`
+## Structure LLM-node input: the chat-message array
 
-When you set the input of an **LLM-kind span** yourself (`setInput` / `set_input`, the `llm` helper, or `trackLlmCall`), prefer a structured object over one blob **where the parts are meaningful** — RAG, tool-augmented, or multi-part prompts:
+When you set the input of an **LLM-kind span** yourself (`setInput` / `set_input`, the `llm` helper, or `trackLlmCall`), pass the same messages you send to the model — a chat-message array, not one blob:
 
 ```ts
-span.setInput({
-  system_instruction: systemPrompt,   // system / developer prompt
-  context: retrievedDocs,             // RAG context, tool results, history
-  query: userQuestion,                // the actual user turn
-});
+span.setInput([
+  { role: 'system', content: systemPrompt },      // rules & role
+  { role: 'context', content: retrievedDocs },    // RAG docs (Trodo extension)
+  { role: 'user', content: 'Where is my order?' },
+  { role: 'assistant', content: null, tool_calls: [/* … */] },
+  { role: 'tool', content: '{"status":"shipped"}', tool_call_id: 'c1' },
+  { role: 'user', content: 'When will it arrive?' },
+]);
 ```
 ```python
-span.set_input({
-    "system_instruction": system_prompt,
-    "context": retrieved_docs,
-    "query": user_question,
-})
+span.set_input([
+    {"role": "system", "content": system_prompt},
+    {"role": "context", "content": retrieved_docs},
+    {"role": "user", "content": user_question},
+])
 ```
 
-Trodo embeds the input **as a whole and each field separately** (`input`, `query`, `context`, `system_instruction`), which powers LLM-node analysis and the context-loss / hallucination detectors. Each field takes a string or a message array (`[{ role, content }, …]`).
+Roles: the standard `system` / `user` / `assistant` / `tool` plus `context` — a Trodo extension for RAG / retrieved documents. **Any order, any number per role.** `content` may be a string, an OpenAI-style content-parts array, or (for `context`) a list of doc strings/objects. Aliases `developer` / `model` / `function` normalise automatically.
 
-**Do this when you can, don't force it.** If the input is a single prompt with no separable parts, pass the plain string — it's embedded as one vector and nothing is lost. Only split when `query` / `context` / `system_instruction` genuinely exist. Auto-instrumented provider spans (OpenAI/Anthropic/…) already carry the provider's message array — this guidance is for spans whose input **you** set.
+Trodo embeds the input **as a whole and each role separately** (all `user` messages as one vector, all `system` as one, …), which powers LLM-node analysis and the grounding / hallucination detectors. Grounding source = `context` messages when present, else the `tool` + `assistant` messages.
+
+**Do this when you can, don't force it.** If the input is a single prompt with no separable parts, pass the plain string — it's embedded as one vector and nothing is lost. Do NOT use the retired `{ system_instruction, context, query }` object — it is treated as one opaque blob (no per-role embeddings, grounding scores skip). Auto-instrumented provider spans (OpenAI/Anthropic/…) already carry the provider's message array and get per-role treatment automatically — this guidance is for spans whose input **you** set.
 
 Docs: `https://docs.trodo.ai/observability/features/instrumentation/manual-spans`.
 
@@ -133,7 +138,7 @@ From the source: `wrapAgent` opens a fresh run context. Calling `wrapAgent` insi
 
 A thrown exception inside `wrapAgent` / `withSpan` / `span` / `joinRun` sets `status = 'error'` on the failing span (and the run) and is re-thrown — you do not need try/catch purely to mark the span as failed.
 
-On **`trodo-node` / `trodo-python` ≥ 2.9.0** the capture is rich and fully automatic — no manual call:
+The capture is automatic:
 
 | Field | Captured from the thrown error |
 |---|---|
@@ -143,15 +148,13 @@ On **`trodo-node` / `trodo-python` ≥ 2.9.0** the capture is rich and fully aut
 | `stack_trace` | the stack / traceback |
 | `level` | `error` (severity; Langfuse-style `debug`/`default`/`warning`/`error`) |
 
-On `< 2.9.0` only `error_type` + `error_message` are recorded. (Auto-instrumented provider spans read the same fields from OTel `exception` events regardless.)
-
 ```ts
 // No try/catch needed just for Trodo
 const order = await lookup(orderId);
 // If lookup throws, the span ends status='error' with type/message/status_code/stack.
 ```
 
-You still need try/catch if you want to handle the error in your own code. To record an error **without** re-throwing (you caught it to recover), use `span.setError({ message, type?, statusCode? })` (Node) / `span.set_error(message, type=, status_code=)` (Python) — a `SpanHandle` method added in 2.9.0. Run-level: `run.setErrorSummary(summary)` / `run.set_error_summary(summary)`.
+You still need try/catch if you want to handle the error in your own code. To record an error **without** re-throwing (you caught it to recover), use `span.setError({ message, type?, statusCode? })` (Node) / `span.set_error(message, type=, status_code=)` (Python). Run-level: `run.setErrorSummary(summary)` / `run.set_error_summary(summary)`.
 
 Full reference: [`https://docs.trodo.ai/observability/features/status-and-errors`](https://docs.trodo.ai/observability/features/status-and-errors).
 
@@ -291,6 +294,6 @@ What goes where:
 Anti-patterns to avoid:
 
 - `setOutput({ summary: r.summary })` — drops `r.results`. Use `setOutput(r)` and put the summary in an attribute instead.
-- `setOutput(r.text.slice(0, 500))` — there's no reason to pre-truncate. SDK caps at 64 KB on its own.
+- `setOutput(r.text.slice(0, 500))` — there's no reason to pre-truncate. SDK caps at 1 MB on its own.
 - Passing pre-shrunk `data` (the LLM-bound copy) to `setOutput` when the tool also has a `raw` field. Prefer `raw` for observability; `data` is for the prompt.
 - Putting structured payloads in `setAttribute`. Attributes are flat; objects get stringified and become hard to search. Keep attributes scalar.

@@ -1,6 +1,6 @@
 # Cross-service — Integration Notes
 
-Targets `trodo-node` >= 2.9.0 and `trodo-python` >= 2.9.0.
+Targets `trodo-node` / `trodo-python` ≥ 2.23.
 
 Docs: `https://docs.trodo.ai/observability/features/instrumentation/distributed-tracing`.
 
@@ -234,7 +234,7 @@ Each tool call gets its own named child span under the caller's `orchestrator` s
 
 Context managers mark the span "ok" on clean exit and "failed" only if an exception propagates through the `with` block. If your code catches exceptions internally and returns error objects (common in resilient orchestrators), spans always appear "ok" even when tools fail.
 
-**On `trodo-node` / `trodo-python` ≥ 2.9.0, do this directly** — `SpanHandle.set_error` / `setError` marks the span failed without any exception gymnastics:
+`SpanHandle.set_error` / `setError` marks the span failed without throwing:
 
 ```python
 with _trodo.join_run(run_id, parent_id, name=name, kind="tool") as span:
@@ -253,49 +253,6 @@ await withSpan('my-tool', async (span) => {
   return result;
 });
 ```
-
-**On `< 2.9.0`** (no `set_error`), fall back to re-raising a sentinel exception inside the `with` block when the result indicates failure, then catch it immediately outside to preserve the return value.
-
-```python
-class _SpanFailed(Exception):
-    pass
-
-async def run_one_tool(run_id, parent_id, name, params):
-    _result = None
-    try:
-        with _trodo.join_run(run_id, parent_id, name=name, kind="tool") as span:
-            span.set_input({"tool": name, "params": params})
-            _result = await execute_tool(name, params)   # never raises — returns error dict
-            status = _result.get("status", "?")
-            output = {"status": status, "data": _result.get("data")}
-            if status in ("error", "timeout"):
-                output["error"] = _result.get("message", status)
-            span.set_output(output)
-            if status in ("error", "timeout"):
-                raise _SpanFailed(output["error"])   # marks span as failed
-    except _SpanFailed:
-        pass   # span ended as failed; _result is set; continue normally
-    return _result
-```
-
-The same principle applies in Node with `withSpan`:
-
-```ts
-let result: ToolResult | undefined;
-try {
-  await withSpan('my-tool', async (span) => {
-    result = await runTool();   // never throws — returns { status, data }
-    span.setOutput({ status: result.status, data: result.data });
-    if (result.status === 'error') throw new Error(result.message);  // marks span failed
-  });
-} catch (e) {
-  if (!result) throw e;  // unexpected error — re-throw
-  // result is set; span is failed; continue
-}
-return result;
-```
-
----
 
 ## Gotchas
 
