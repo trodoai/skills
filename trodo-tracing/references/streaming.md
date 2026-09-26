@@ -166,8 +166,10 @@ returns. Two shapes work (full code in `runtimes.md` §Streaming and `long-sessi
 - **Express / raw SSE:** keep `wrapAgent` around the whole `for await` loop that writes
   chunks, call `run.setOutput(full)` after the loop, then return.
 - **Next.js / any handler that must return a `Response` before the stream ends:**
-  `startRun` before `streamText`, `endRun(runId, { output: text })` in `onFinish`
-  (and `endRun(..., { status: 'error' })` in `onError`), return the stream response.
+  keep `wrapAgent` open, resolve the text in `onFinish`, hand the `Response` out of the
+  callback, and hold the function with `after()` for the flush — `vercel-ai-sdk.md`
+  §Streaming. Not `startRun`/`endRun`: `startRun` does not activate the run context,
+  so the AI SDK's spans would be dropped.
 
 Never return the stream object from inside a `wrapAgent` callback.
 

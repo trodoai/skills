@@ -79,7 +79,8 @@ When a framework and its provider are both instrumented, one model call can prod
 two `llm` spans.
 
 - **Node + LangChain:** `trodo.init({ siteId, disableInstrumentations: ['openai'] })`
-  (add `'anthropic'` etc. as relevant).
+  (add `'anthropic'` etc. as relevant). Requires `trodo-node` ≥ 2.23.4 — earlier
+  releases accepted the option only on `registerOTel()` and `init()` ignored it.
 - **Python + LangChain:** do **not** disable the provider — the Python LangChain
   instrumentor defers to it and you would lose the LLM span. The SDK warns
   (`superseded-…`) when it detects the overlap.
@@ -101,8 +102,13 @@ trodo.init({ siteId: process.env.TRODO_SITE_ID!, debug: true });
 trodo.init(site_id=os.environ["TRODO_SITE_ID"], debug=True)
 ```
 
-Expect `[trodo] instrumented: openai` (one line per package). Missing line → the package
-is not installed, or the client was constructed before init. Then run one request and
+Node prints `[trodo-node] auto-instrumentation registered (N active: openai, …)` — a
+provider missing from that list is not installed, or its peer failed to load. Python
+prints no per-package line; it prints a one-time warning only when something is wrong
+(a missing peer, or `'langchain' was NOT loaded because openai instrumentation is
+already active`, which is expected). On both, the real check is the next step: the run
+must show `llm` children. None → the client was constructed before `init`, or the
+instrumentor package is not installed. Then run one request and
 open the run: the root should show `llm` children with model and tokens. If tokens are
 present but input/output are blank on Node OpenAI, that is the first-party
 `@opentelemetry/instrumentation-openai` routing message content to OTel *logs*. The

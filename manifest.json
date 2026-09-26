@@ -1,39 +1,8 @@
 {
   "name": "trodoai/skills",
   "version": "3.0.0",
-  "description": "Trodo agent-tracing skills for trodo-node and trodo-python: trodo-tracing installs tracing (maps every agent entry point, decides the run boundary by a fixed rule in references/run-model.md, wires runs, spans, identity, conversation, input/output and metadata); trodo-heal-tracing audits an existing integration against the same run model and fixes the gaps that make the dashboard lie.",
+  "description": "Trodo agent tracing for trodo-node and trodo-python: one skill that maps every agent entry point, decides the run boundary by a fixed rule (references/run-model.md), wires runs, spans, identity, conversation, input/output and metadata, and audits existing integrations against the same model.",
   "skills": [
-    "trodo-tracing",
-    "trodo-heal-tracing"
-  ],
-  "modules": {
-    "trodo-tracing": [
-      "references/run-model.md",
-      "references/stack-map.md",
-      "references/frameworks.md",
-      "references/runtimes.md",
-      "references/auto-instrumentation.md",
-      "references/manual-instrumentation.md",
-      "references/streaming.md",
-      "references/long-session.md",
-      "references/cross-service.md",
-      "references/mcp-runless.md",
-      "references/vercel-ai-sdk.md",
-      "references/dual-export.md"
-    ]
-  },
-  "bundles": {
-    "all": [
-      "trodo-tracing",
-      "trodo-heal-tracing"
-    ],
-    "install": [
-      "trodo-tracing"
-    ],
-    "heal": [
-      "trodo-tracing",
-      "trodo-heal-tracing"
-    ]
-  },
-  "default_bundle": "all"
+    "trodo-tracing"
+  ]
 }

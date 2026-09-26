@@ -13,13 +13,11 @@ Docs: `https://docs.trodo.ai/observability/features/instrumentation/long-running
 `wrapAgent` opens and closes the run in one call stack. Use the split primitives only
 when **one run's** beginning and end are genuinely in different call stacks:
 
-1. **A streaming route that must return before the reply is complete** — Next.js /
-   Vercel AI `streamText` returned as a `Response`; the run ends in `onFinish`.
-2. **A job pre-empted and resumed on another worker** — start on worker A, spans from
+1. **A job pre-empted and resumed on another worker** — start on worker A, spans from
    worker B, close from whoever finishes.
-3. **Human-in-the-loop** — a LangGraph `interrupt()` or an approval step; the run
+2. **Human-in-the-loop** — a LangGraph `interrupt()` or an approval step; the run
    pauses and resumes on a later request, still producing *one* reply.
-4. **A single reply assembled across websocket frames** (rare). One inbound message
+3. **A single reply assembled across websocket frames** (rare). One inbound message
    that produces one reply is still `wrapAgent` in the message handler.
 
 If the run fits inside one async function, use `wrapAgent`.
@@ -34,26 +32,10 @@ persist runId               joinRun(runId, …) → span
 
 The same `runId` threads through; the backend stitches the spans under one run.
 
-## Node — streaming route (Next.js + Vercel AI SDK)
-
-```ts
-export async function POST(req: Request) {
-  const { messages, userId, chatId } = await req.json();
-  const runId = await trodo.startRun('support_chat', {
-    distinctId: userId, conversationId: chatId, input: messages,
-    metadata: { channel: 'web' },
-  });
-  const result = streamText({
-    model: openai('gpt-4o'),
-    messages,
-    onFinish: async ({ text }) => { await trodo.endRun(runId, { output: text }); },
-    onError: async ({ error }) => {
-      await trodo.endRun(runId, { status: 'error', errorSummary: String(error) });
-    },
-  });
-  return result.toUIMessageStreamResponse();
-}
-```
+> **Not for a streaming route.** A Next.js / Vercel AI route that returns the stream
+> `Response` early keeps `wrapAgent` open instead (`vercel-ai-sdk.md` §Streaming).
+> `startRun` does not activate the run context, so spans that rely on it — every
+> auto-instrumented and AI SDK span — are dropped; only explicit `joinRun` spans land.
 
 ## Python — job resumed on another worker
 
@@ -98,4 +80,4 @@ def finish_job(job_id, result, ok=True):
 | `runId` not persisted / TTL shorter than the job | persist keyed by your job or session id; refresh the TTL on each touch |
 | `joinRun(undefined, …)` | silent no-op — assert the id before crossing a boundary |
 | Using this for every turn of a chat | one `wrapAgent` per turn + `conversationId`; this pattern is for a *single* turn that spans requests |
-| Spans from `streamText` land outside the run in a `startRun` route | wrap the call: `trodo.joinRun(runId, null, () => streamText(...), { name: 'turn', kind: 'agent' })` |
+| Auto-instrumented / AI SDK spans missing on a `startRun` run | `startRun` does not activate context; run that work inside `joinRun(runId, …)`, or use `wrapAgent` if the run fits in one call stack |

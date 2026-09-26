@@ -27,7 +27,7 @@ Docs index: `https://docs.trodo.ai/observability/features/instrumentation/framew
 
 Docs per provider: `…/instrumentation/frameworks/openai`, `/anthropic`, `/google`, `/bedrock`, `/cohere`, `/mistral`, `/http`, and `…/instrumentation/raw-http`.
 
-**Install the instrumentor package** alongside the SDK — `trodo.init()` registers only what is present. `init({ debug: true })` prints `[trodo] instrumented: openai` per package; a missing peer prints the install command once.
+**Install the instrumentor package** alongside the SDK — `trodo.init()` registers only what is present. With `init({ debug: true })` Node prints the active instrumentors once at startup; a missing peer prints the install command once. Python prints nothing per package — confirm by seeing `llm` spans on the first run.
 
 **Node ESM** (`"type": "module"`): raw provider SDKs need module hooking. Start with `node --import trodo-node/register app.js` (calls `init()` from `TRODO_SITE_ID`; do not call `init()` again). Per the docs, even with the hook the raw `openai` 4.x/5.x, Anthropic and Google SDKs may still emit no spans under ESM — verify with `debug: true`; if empty, wrap those calls with `trodo.llm(...)` or run CommonJS. LangChain and the Vercel AI SDK are unaffected. Python is unaffected.
 

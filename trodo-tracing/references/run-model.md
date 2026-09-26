@@ -91,7 +91,7 @@ Rules that follow:
 
 1. **Run input is never captured automatically** — the callback has no arguments. Call `run.setInput(...)` first thing in every wrap. (Python decorator `@trodo.agent` captures the function's arguments; the context manager does not.)
 2. **Run output = the callback's return value unless you `setOutput`.** Route handlers usually return a `Response` / `res.json(...)` / `None` — in a handler, call `run.setOutput(reply)` explicitly with the reply, not the HTTP object.
-3. **Streaming: the wrap must stay open until the full text exists.** `await result.text` (Vercel AI), `await stream.finalMessage()` (Anthropic), accumulate deltas (OpenAI) — then `setOutput`, then return. If the route must return the stream to the browser *before* it ends, keep the wrap alive with a promise resolved in `onFinish` and return the `Response` from *outside* the wrap, or use `startRun`/`endRun` with `endRun` in `onFinish`.
+3. **Streaming: the wrap must stay open until the full text exists.** `await result.text` (Vercel AI), `await stream.finalMessage()` (Anthropic), accumulate deltas (OpenAI) — then `setOutput`, then return. If the route must return the stream to the browser *before* it ends, keep the wrap alive with a promise resolved in `onFinish` and hand the `Response` out of it (`vercel-ai-sdk.md` §Streaming). Not `startRun`/`endRun`: `startRun` does not activate the run context, so auto-instrumented and AI SDK spans would be dropped.
 4. **Never pre-truncate or summarise** what goes into `setOutput`. The SDK caps at 1 MB.
 5. **Never put the whole history in the *output***; the extractor takes the last assistant message, so a history array works, but a plain reply string is cleaner.
 
@@ -157,7 +157,7 @@ Span-level scalars (`result_count`, `topic`, `cache_hit`) go on the span with `s
 | One-shot script / CLI / cron process | once at the top | **`await` every wrap** and `await trodo.shutdown()` before exit — an unawaited wrap loses the run silently |
 | Serverless function (Lambda, Cloud Run request-scoped, Vercel Function) | once at module scope (cold start) | `await trodo.flush()` before returning the response, or hand the flush to the platform's `waitUntil` / `after()`; never fire-and-forget the wrap |
 | Worker (queue consumer) | once at worker start | per job nothing; `shutdown()` on drain |
-| Test runner / CI | don't init, or init behind `TRODO_DISABLED` / a missing `TRODO_SITE_ID` guard so the suite doesn't emit |
+| Test runner / CI | keep `init` in an entry module tests never import, or use the guarded tracing module with no-op fallbacks in `runtimes.md` — the SDKs throw on `wrapAgent` before `init`, so a bare skipped `init` crashes the app |
 
 ---
 

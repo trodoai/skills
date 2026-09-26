@@ -11,7 +11,8 @@ description: >-
   run grouped by conversationId), then wire trodo-node / trodo-python with the right
   identity, input/output and metadata. Use for "add Trodo tracing", "instrument my
   agents", "trace my LangChain / Vercel AI / OpenAI / MCP / multi-agent app",
-  "add Trodo next to my OTel". For auditing an existing install use trodo-heal-tracing.
+  "add Trodo next to my OTel", and for auditing or fixing an existing Trodo integration
+  ("my runs split", "error with no message", "output is empty").
 ---
 
 # Trodo Tracing
@@ -34,7 +35,8 @@ applying it.
   env only — never `NEXT_PUBLIC_` / `VITE_` / `PUBLIC_`. If the user gave it in the
   prompt, use it; otherwise ask once, or leave the env var name in place and tell them.
 - **Already instrumented?** If `trodo.init` / `wrapAgent` / `wrap_agent` / `trackMcp`
-  already exist, stop and use [`trodo-heal-tracing`](../trodo-heal-tracing/SKILL.md).
+  already exist, run the same procedure in audit mode — step 3 becomes a gap report and
+  step 4 applies approved fixes. See [`references/audit.md`](./references/audit.md).
 - **Docs:** `https://docs.trodo.ai/llms.txt` lists every page; append `.md` to any
   page URL for markdown. Read the page a recipe cites before writing that recipe's code.
 
@@ -151,6 +153,7 @@ and give the user the checklist to run.
 | MCP servers: `trackMcp` runless spans | [`references/mcp-runless.md`](./references/mcp-runless.md) |
 | Vercel AI SDK v5/v6/v7 specifics, Next.js `instrumentation.ts` | [`references/vercel-ai-sdk.md`](./references/vercel-ai-sdk.md) |
 | Existing OTel (Datadog/Honeycomb/`@vercel/otel`), OTLP path | [`references/dual-export.md`](./references/dual-export.md) |
+| Auditing an existing integration: invariants, inventory, gap catalog, gap report | [`references/audit.md`](./references/audit.md) |
 | Reporting a wrong or missing instruction in this skill | [`references/skill-feedback.md`](./references/skill-feedback.md) |
 
 Docs pages (append `.md` for markdown): `wrap-your-agent`, `manual-spans`,

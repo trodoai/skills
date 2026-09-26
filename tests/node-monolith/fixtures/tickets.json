@@ -1,0 +1,5 @@
+[
+  { "id": "T-1001", "subject": "Charged twice for one order", "body": "My card shows two charges for order 5512. Please refund one of them." },
+  { "id": "T-1002", "subject": "Cannot log in after password reset", "body": "I reset my password but the new one is rejected every time." },
+  { "id": "T-1003", "subject": "Feature request: dark mode", "body": "It would be great if the dashboard had a dark theme option." }
+]

@@ -1,0 +1,7 @@
+.venv/
+__pycache__/
+logs/
+queue/
+mock/ingest-log.jsonl
+data/doc_index.json
+.claude/

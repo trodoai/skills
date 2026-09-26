@@ -1,0 +1,4 @@
+node_modules/
+.logs/
+mock/ingest-log.jsonl
+.claude/

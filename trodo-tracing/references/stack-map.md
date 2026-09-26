@@ -44,7 +44,7 @@ Grep imports, not file names. One service commonly has several.
 | Gateways / proxies | `baseURL`/`base_url` pointing at OpenRouter, LiteLLM, Vercel AI Gateway, Azure OpenAI, a self-hosted vLLM / Ollama | The provider SDK is still instrumented; model/provider attribution comes from the model name — check `references/frameworks.md` §Gateways |
 | MCP | `@modelcontextprotocol/sdk`, `mcp` (Python), a `tools/call` JSON-RPC handler | Runless spans — `references/mcp-runless.md` |
 | Existing OTel | `@opentelemetry/sdk-node`, `NodeTracerProvider`, `TracerProvider`, `OTLPTraceExporter`, `@vercel/otel`, `dd-trace`, `instrumentation.ts` | Coexistence — `references/dual-export.md` |
-| Existing Trodo | `trodo.init`, `wrapAgent`, `wrap_agent`, `startRun`, `trackMcp`, `TRODO_SITE_ID` | Hand off to `trodo-heal-tracing` if it is already installed |
+| Existing Trodo | `trodo.init`, `wrapAgent`, `wrap_agent`, `startRun`, `trackMcp`, `TRODO_SITE_ID` | Already installed → audit mode, `references/audit.md` |
 
 ## 4. Entry points — the rows of the table
 

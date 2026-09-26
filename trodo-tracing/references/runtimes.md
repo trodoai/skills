@@ -13,7 +13,51 @@ import os, trodo
 trodo.init(site_id=os.environ["TRODO_SITE_ID"])        # then `from openai import OpenAI`
 ```
 
-`TRODO_SITE_ID` is server-side only — never `NEXT_PUBLIC_` / `VITE_` / `PUBLIC_`. Guard tests: `if os.environ.get("TRODO_SITE_ID") and not os.environ.get("TRODO_DISABLED"): trodo.init(...)`, or leave `init` in the app entry that tests never import.
+`TRODO_SITE_ID` is server-side only — never `NEXT_PUBLIC_` / `VITE_` / `PUBLIC_`.
+
+**Turning tracing off (tests, local runs without a site id).** Both SDKs **throw** if
+`wrapAgent` / `withSpan` / `wrap_agent` / `span` are called before `init` — so never
+just skip `init` behind a guard. Either keep `init` in the entry module tests never
+import, or put the guard in one small tracing module that the app imports everything
+from, with no-op fallbacks when disabled:
+
+```python
+# app/tracing.py
+import os, contextlib
+ENABLED = bool(os.environ.get("TRODO_SITE_ID")) and not os.environ.get("TRODO_DISABLED")
+if ENABLED:
+    import trodo
+    trodo.init(site_id=os.environ["TRODO_SITE_ID"])
+    wrap_agent, span, current_run_id, shutdown = trodo.wrap_agent, trodo.span, trodo.current_run_id, trodo.shutdown
+else:
+    class _Noop:
+        run_id = None
+        def __getattr__(self, _):            # set_input, set_output, set_metadata, set_error, …
+            return lambda *a, **k: None
+    @contextlib.contextmanager
+    def _noop(*a, **k):
+        yield _Noop()
+    wrap_agent = span = _noop
+    current_run_id = lambda: None
+    shutdown = lambda: None
+```
+```ts
+// src/tracing.ts
+import trodo from 'trodo-node';
+export const enabled = !!process.env.TRODO_SITE_ID && !process.env.TRODO_DISABLED;
+if (enabled) trodo.init({ siteId: process.env.TRODO_SITE_ID! });
+const noop: any = new Proxy({}, { get: () => () => undefined });
+export const wrapAgent: typeof trodo.wrapAgent = enabled
+  ? trodo.wrapAgent
+  : (async (_n: string, fn: any) => ({ result: await fn(noop), runId: '' })) as any;
+export const withSpan: typeof trodo.withSpan = enabled
+  ? trodo.withSpan
+  : (async (_n: string, fn: any) => fn(noop)) as any;
+```
+
+Import `wrapAgent` / `wrap_agent` etc. from this module, not from the SDK, at every call
+site. Verify the disabled path once: run a one-shot entry point without `TRODO_SITE_ID`
+and confirm it exits 0.
 
 A **shared provider client constructed at module top level** (`export const openai = new OpenAI()` in `lib/llm.ts`, imported by the entry file) is the most common reason LLM spans are missing: the module graph evaluates `lib/llm.ts` before the line that calls `init()`. Fix by putting `init()` in its own module imported **first**, or by making the client lazy.
 
@@ -57,19 +101,12 @@ await trodo.wrapAgent('support_chat', async (run) => {
   return full;
 }, opts);
 
-// C — the route must return a Response object before the stream ends (Next.js / Vercel AI)
-export async function POST(req: Request) {
-  const runId = await trodo.startRun('support_chat', { distinctId, conversationId, input: messages });
-  const result = streamText({
-    model, messages,
-    onFinish: async ({ text }) => { await trodo.endRun(runId, { output: text }); },
-    onError: async ({ error }) => { await trodo.endRun(runId, { status: 'error', errorSummary: String(error) }); },
-  });
-  return result.toUIMessageStreamResponse();   // returns immediately; the run closes in onFinish
-}
+// C — the route must return a Response object before the stream ends (Next.js / Vercel AI):
+//     keep wrapAgent open and hand the Response out of it — full recipe in
+//     vercel-ai-sdk.md §Streaming. Not startRun/endRun: startRun does not activate
+//     the run context, so the AI SDK's llm/tool spans would be dropped.
 ```
 
-`streamText` / `generateText` calls made inside a `startRun` route are still captured by the AI SDK integration; join them to the run with `trodo.joinRun(runId, null, () => streamText(...), { name: 'turn' })` if they land outside it on your first debug run.
 
 ---
 
